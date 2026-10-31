@@ -1,5 +1,35 @@
 # Published RM27 bench/offline research
 
+2026-10-31 documentation publication: the four historical RAM diagnostic RESULT
+reports below are included; raw data, firmware/parameters, approvals, source
+overlays and test helpers remain local. See
+`../rm27/perception/vision/docs/RAM_DIAGNOSTIC_PUBLICATION.md` for exact scope.
+Older "NOT pushed" notices below describe their original dated snapshots.
+
+Local latest2026-10-12: `imu-ram-run-20261012/RESULT.md` / analysis-reviewed.json /
+verification.json. ONE approved physical RAM observation consumed,58s host bound,
+two identical/checksum-valid frozen dumps. Dynamically located logger Wait/depth-one
+overwrite, not a fix/global hardware PASS. Original raw prefix/wire/trace preserved;
+13 board helpers/8 local tests and evidence verification pass. Runtime restored,
+diagnostic firmware remains installed, no stock rollback/flight. Whole capture
+still has two gyro holes, one startup TX rejection and196.32949Hz below200 gate.
+S0/P PARTIAL, Stage C closed. Ignored local artifact NOT pushed. Do not rerun.
+Below no-trace/no-flash/build-only notices are historical snapshots.
+
+Local latest2026-10-12: `imu-ram-build-20261012/RESULT.md` / FLASH_APPROVAL.
+Actual OFF/ON board compile/link VERIFIED; candidate04 NuttX native atomic port,
+no flash/runtime/logger-cause PASS. Original candidate03 failure and trace snapshot
+preserved. Official firmware copied locally; fresh backups/rollback choice/final
+approval still required. This new ignored artifact folder has NOT been pushed.
+
+Local follow-up2026-10-12: `imu-ram-trace-20261012/RESULT.md` / DESIGN / APPROVAL.
+Bounded RAM collector and pinned patch implemented/tested OFFLINE, Cortex-M7
+objects compiled; no full board image, flash or physical trial. TSAN unavailable;
+skip trigger/hardware health UNKNOWN, S0/P PARTIAL, Stage C CLOSED. Original image
+backup/full build/current params/approval remain gates. No push/publication of
+this new locally ignored folder is claimed. Earlier DESIGN ONLY notices below
+refer to historical snapshots; do not rerun high-load coordinators.
+
 2026-10-12 publication index:
 `../rm27/perception/vision/docs/PUBLICATION_20261012.md` and
 `publication-20261012/VALIDATION.md`. Pending controller/diagnostic source and
