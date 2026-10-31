@@ -64,6 +64,27 @@ def checked_file(path, expected=None):
     return path, actual
 
 
+def cleanup_container(container, log):
+    """Remove one owned replay container and verify absence before sealing output."""
+    cleanup = dict(container=container, absence_verified=False)
+    try:
+        removed = subprocess.run(['docker', 'rm', '-f', container], stdout=log,
+                                 stderr=subprocess.STDOUT, timeout=30)
+        cleanup['remove_exit_code'] = removed.returncode
+    except (OSError, subprocess.SubprocessError) as exc:
+        cleanup['remove_error'] = str(exc)
+    try:
+        remaining = subprocess.run(['docker', 'ps', '--all', '--filter',
+            'name=^/'+container+'$', '--format', '{{.ID}}'], stdout=subprocess.PIPE,
+            stderr=log, text=True, timeout=30)
+        cleanup.update(inspect_exit_code=remaining.returncode,
+                       remaining_container_ids=remaining.stdout.split(),
+                       absence_verified=remaining.returncode == 0 and not remaining.stdout.strip())
+    except (OSError, subprocess.SubprocessError) as exc:
+        cleanup['inspect_error'] = str(exc)
+    return cleanup
+
+
 def resolve(base, name):
     require(isinstance(name, str) and bool(name), 'INVALID_PATH', str(name))
     return (Path(base)/name).resolve()

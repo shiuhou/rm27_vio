@@ -1,0 +1,96 @@
+--- a/svo_direct/include/svo/direct/patch_score.h
++++ b/svo_direct/include/svo/direct/patch_score.h
+@@ -13,7 +13,7 @@
+ #if __SSSE3__
+ # include <tmmintrin.h>
+ #endif
+-#ifdef __ARM_NEON__
++#if defined(__ARM_NEON__) || defined(__ARM_NEON)
+ # include <arm_neon.h>
+ #endif
+ 
+@@ -53,7 +53,7 @@
+   ZMSSD(uint8_t* ref_patch) :
+     ref_patch_(ref_patch)
+   {
+-#ifdef __ARM_NEON__
++#if defined(__ARM_NEON__) || defined(__ARM_NEON)
+     if(patch_size_ == 0)
+     {
+       uint16x8_t tpl_x8;
+@@ -225,7 +225,7 @@
+     }
+     else
+ #endif
+-#ifdef __ARM_NEON__
++#if defined(__ARM_NEON__) || defined(__ARM_NEON)
+     if(patch_size_ == 8)
+     {
+       uint16x8_t img_x8, tpl_x8;
+--- a/svo_direct/src/feature_alignment.cpp
++++ b/svo_direct/src/feature_alignment.cpp
+@@ -11,7 +11,7 @@
+ #ifdef __SSE2__
+ # include <emmintrin.h>
+ #endif
+-#ifdef __ARM_NEON__
++#if defined(__ARM_NEON__) || defined(__ARM_NEON)
+ # include <arm_neon.h>
+ #endif
+ 
+@@ -220,7 +220,7 @@
+     bool no_simd,
+     std::vector<Eigen::Vector2f> *each_step)
+ {
+-#ifdef __ARM_NEON__
++#if defined(__ARM_NEON__) || defined(__ARM_NEON)
+   if(!no_simd)
+     return align2D_NEON(cur_img, ref_patch_with_border,
+                         ref_patch, n_iter, cur_px_estimate);
+@@ -626,7 +626,7 @@
+     const float subpix_y = v-v_r;
+     float b1=0, b2=0;
+ 
+-#ifdef __ARM_NEON__
++#if defined(__ARM_NEON__) || defined(__ARM_NEON)
+     const int SHIFT_BITS = 7;
+     const uint16_t wTL = static_cast<uint16_t>((1.0f-subpix_x)*(1.0f-subpix_y)*(1<<SHIFT_BITS));
+     const uint16_t wTR = static_cast<uint16_t>(subpix_x*(1.0f-subpix_y)*(1<<SHIFT_BITS));
+@@ -871,7 +871,7 @@
+       uint8_t* it_ref = ref_patch;
+       Eigen::Vector2f Jres; Jres.setZero();
+ 
+-#ifdef __ARM_NEON__
++#if defined(__ARM_NEON__) || defined(__ARM_NEON)
+       // initialize result to zero
+       int32x4_t vb1 = vdupq_n_s32(0);
+       int32x4_t vb2 = vdupq_n_s32(0);
+--- a/vikit/vikit_common/src/vision.cpp
++++ b/vikit/vikit_common/src/vision.cpp
+@@ -9,7 +9,7 @@
+ 
+ #if __SSE2__
+ # include <emmintrin.h>
+-#elif __ARM_NEON__
++#elif defined(__ARM_NEON__) || defined(__ARM_NEON)
+ # include <arm_neon.h>
+ #endif
+ 
+@@ -44,7 +44,7 @@
+ }
+ #endif 
+ 
+-#ifdef __ARM_NEON__
++#if defined(__ARM_NEON__) || defined(__ARM_NEON)
+ void halfSampleNEON( const cv::Mat& in, cv::Mat& out )
+ {
+   const int in_stride = in.step.p[0];
+@@ -87,7 +87,7 @@
+   }
+ #endif
+ 
+-#ifdef __ARM_NEON__ 
++#if defined(__ARM_NEON__) || defined(__ARM_NEON) 
+   if( (in.cols % 16) == 0 )
+   {
+     halfSampleNEON(in, out);

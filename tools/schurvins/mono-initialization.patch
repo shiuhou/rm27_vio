@@ -1,0 +1,636 @@
+--- a/svo/include/svo/frame_handler_mono.h
++++ b/svo/include/svo/frame_handler_mono.h
+@@ -9,6 +9,7 @@
+ #pragma once
+ 
+ #include <svo/frame_handler_base.h>
++#include <svo/rm27_mono_alignment.h>
+ 
+ namespace svo {
+ 
+@@ -39,6 +40,7 @@
+       const CameraBundle::Ptr& cam);
+ 
+   virtual ~FrameHandlerMono() = default;
++  void setMonoAlignmentPolicy(const rm27::MonoAlignmentPolicy& p) { mono_alignment_.policy=p; }
+ 
+   /// @name Main Interface
+   ///
+@@ -85,6 +87,10 @@
+ 
+ protected:
+ 
++  bool geometric_ready_ = false;
++  rm27::MonoAlignment mono_alignment_;
++  bool tryMetricInitialization();
++  void transformMetricMap(const rm27::MonoAlignmentResult& result);
+   // helpers
+   const FramePtr& newFrame() const;
+ 
+--- a/svo/include/svo/rm27_mono_alignment.h
++++ b/svo/include/svo/rm27_mono_alignment.h
+@@ -0,0 +1,159 @@
++// RM27 visual-inertial bootstrap. Independent of truth and output adapters.
++// Equations: p_j-p_i=v_i dt+g dt^2/2+alpha, v_j-v_i=g dt+beta.
++#pragma once
++#include <svo/common/frame.h>
++#include <svo/imu_handler.h>
++#include <Eigen/Cholesky>
++#include <Eigen/SVD>
++#include <Eigen/Geometry>
++#include <vector>
++namespace rm27 {
++using V3 = Eigen::Vector3d;
++using M3 = Eigen::Matrix3d;
++inline Eigen::Quaterniond expq(const V3& x) {
++  const double a=x.norm();
++  return a<1e-12 ? Eigen::Quaterniond(1,x.x()/2,x.y()/2,x.z()/2).normalized()
++                 : Eigen::Quaterniond(Eigen::AngleAxisd(a,x/a));
++}
++inline V3 logq(Eigen::Quaterniond q) {
++  q.normalize(); if(q.w()<0)q.coeffs()*=-1;
++  Eigen::AngleAxisd aa(q); return aa.axis()*aa.angle();
++}
++struct MonoAlignmentPolicy {
++  size_t min_frames=31, max_frames=61;
++  double min_span_s=1.5, max_imu_gap_s=.015, min_excitation_mps2=.25;
++  double gravity_mps2=9.81007, gravity_tolerance_mps2=1.0;
++  double max_gyro_bias_rps=.2, max_accel_bias_mps2=1.0;
++  double max_residual_mps=.05, min_singular_ratio=1e-6;
++  double max_rotation_residual_rad=.02, min_imu_translation_m=.05;
++};
++struct MonoPose {
++  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
++  double t; V3 camera; Eigen::Quaterniond q; svo::ImuMeasurements imu;
++};
++struct Preintegral {
++  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
++  double dt=0; V3 alpha=V3::Zero(),beta=V3::Zero();
++  M3 ja=M3::Zero(),jb=M3::Zero(); Eigen::Quaterniond q=Eigen::Quaterniond::Identity();
++};
++struct MonoAlignmentResult {
++  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
++  bool accepted=false; const char* reason="WINDOW_SHORT";
++  double scale=0, excitation=0, residual=0, singular_ratio=0;
++  V3 gravity=V3::Zero(), ba=V3::Zero(), bg=V3::Zero(), velocity=V3::Zero();
++};
++class MonoAlignment {
++ public:
++  EIGEN_MAKE_ALIGNED_OPERATOR_NEW
++  MonoAlignmentPolicy policy;
++  std::vector<MonoPose,Eigen::aligned_allocator<MonoPose>> poses;
++  void reset(){poses.clear();}
++  void add(const svo::FrameBundle::Ptr& f) {
++    MonoPose p; p.t=f->getMinTimestampSeconds(); p.camera=f->at(0)->T_world_cam().getPosition();
++    p.q=f->get_T_W_B().getEigenQuaternion(); p.imu=f->imu_datas_;
++    if(!poses.empty() && p.t<=poses.back().t){reset();return;}
++    poses.push_back(p); if(poses.size()>policy.max_frames)poses.erase(poses.begin());
++  }
++  bool integrate(size_t j,const V3& bg,Preintegral& out) const {
++    const auto& a=poses[j-1];const auto& b=poses[j];
++    const auto& samples=b.imu;out=Preintegral();out.q=a.q;
++    if(samples.size()<2 || samples.front().timestamp_>a.t+1e-6 || samples.back().timestamp_<b.t-1e-6)return false;
++    for(size_t k=1;k<samples.size();++k){
++      const auto& u=samples[k-1];const auto& v=samples[k];
++      const double gap=v.timestamp_-u.timestamp_;
++      if(gap<=0 || gap>policy.max_imu_gap_s)return false;
++      const double l=std::max(a.t,u.timestamp_),r=std::min(b.t,v.timestamp_);if(r<=l)continue;
++      const double dt=r-l,w=((l+r)/2-u.timestamp_)/gap;
++      const V3 gyro=(1-w)*u.angular_velocity_+w*v.angular_velocity_-bg;
++      const V3 acc=(1-w)*u.linear_acceleration_+w*v.linear_acceleration_;
++      const M3 rot=(out.q*expq(gyro*dt/2)).toRotationMatrix();
++      out.alpha+=out.beta*dt+.5*rot*acc*dt*dt;out.ja+=out.jb*dt+.5*rot*dt*dt;
++      out.beta+=rot*acc*dt;out.jb+=rot*dt;out.q=(out.q*expq(gyro*dt)).normalized();out.dt+=dt;
++    }
++    return std::abs(out.dt-(b.t-a.t))<1e-6;
++  }
++  MonoAlignmentResult solve(const V3& t_imu_camera)const {
++    MonoAlignmentResult out;
++    const size_t n=poses.size();if(n<policy.min_frames || poses.back().t-poses.front().t<policy.min_span_s)return out;
++    // Gyro bias is estimated against visual relative rotations, with numerical
++    // Jacobians of the same preintegrator, then all deltas are recomputed.
++    V3 bg=V3::Zero();
++    for(int iteration=0;iteration<3;++iteration){
++      M3 H=M3::Zero();V3 rhs=V3::Zero();
++      for(size_t j=1;j<n;++j){Preintegral p;if(!integrate(j,bg,p)){out.reason="IMU_COVERAGE_OR_GAP";return out;}
++        const V3 e=logq(p.q.inverse()*poses[j].q);M3 J;
++        for(int k=0;k<3;++k){V3 d=V3::Zero();d[k]=1e-5;Preintegral q;integrate(j,bg+d,q);J.col(k)=(logq(q.q.inverse()*poses[j].q)-e)/1e-5;}
++        H+=J.transpose()*J;rhs-=J.transpose()*e;
++      }
++      Eigen::JacobiSVD<M3> gyro_svd(H);
++      if(gyro_svd.singularValues()[2]<1e-12 || gyro_svd.singularValues()[2]/gyro_svd.singularValues()[0]<policy.min_singular_ratio){out.reason="GYRO_UNOBSERVABLE";return out;}
++      const V3 d=H.ldlt().solve(rhs);if(!d.allFinite()){out.reason="GYRO_UNOBSERVABLE";return out;}bg+=d;
++    }
++    out.bg=bg;if(bg.norm()>policy.max_gyro_bias_rps){out.reason="GYRO_BIAS_BOUND";return out;}
++    std::vector<Preintegral,Eigen::aligned_allocator<Preintegral>> deltas(n-1);V3 mean=V3::Zero();
++    for(size_t j=1;j<n;++j){if(!integrate(j,bg,deltas[j-1])){out.reason="IMU_COVERAGE_OR_GAP";return out;}
++      if(logq(deltas[j-1].q.inverse()*poses[j].q).norm()>policy.max_rotation_residual_rad){out.reason="ROTATION_RESIDUAL";return out;}
++      mean+=deltas[j-1].beta/deltas[j-1].dt;}
++    mean/=n-1;double variance=0;for(const auto& p:deltas)variance+=(p.beta/p.dt-mean).squaredNorm();
++    out.excitation=std::sqrt(variance/(n-1));if(out.excitation<policy.min_excitation_mps2){out.reason="EXCITATION_LOW";return out;}
++    double displacement=0;for(const auto& p:poses)displacement=std::max(displacement,(p.camera-poses[0].camera).norm());
++    if(displacement<1e-3){out.reason="PARALLAX_LOW";return out;}
++    V3 g=V3::Zero();Eigen::VectorXd x;double scale=0;V3 ba=V3::Zero();
++    for(int iteration=0;iteration<5;++iteration){
++      const int gd=iteration==0?3:2, cols=3*n+gd+4;M3 basis=M3::Identity();
++      if(iteration){const V3 axis=g.normalized();const V3 u=axis.unitOrthogonal();basis.col(0)=u;basis.col(1)=axis.cross(u);}
++      Eigen::MatrixXd A=Eigen::MatrixXd::Zero(6*(n-1),cols);Eigen::VectorXd b=Eigen::VectorXd::Zero(A.rows());
++      for(size_t j=1;j<n;++j){const auto& p=deltas[j-1];const double dt=p.dt;const int r=6*(j-1),vi=3*(j-1),vj=3*j;
++        A.block<3,3>(r,vi)=-M3::Identity();
++        A.block(r,3*n,3,gd)=-.5*dt*basis.leftCols(gd);
++        A.block<3,3>(r,3*n+gd)=p.ja/dt;
++        A.block<3,1>(r,cols-1)=(poses[j].camera-poses[j-1].camera)/dt;
++        b.segment<3>(r)=(p.alpha+(poses[j].q* t_imu_camera-poses[j-1].q*t_imu_camera))/dt;
++        A.block<3,3>(r+3,vi)=-M3::Identity();A.block<3,3>(r+3,vj)=M3::Identity();
++        A.block(r+3,3*n,3,gd)=-dt*basis.leftCols(gd);A.block<3,3>(r+3,3*n+gd)=p.jb;
++        b.segment<3>(r+3)=p.beta;
++        if(iteration){b.segment<3>(r)+=.5*dt*g;b.segment<3>(r+3)+=dt*g;}
++      }
++      Eigen::VectorXd norms=A.colwise().norm();if((norms.array()<1e-12).any()){out.reason="ALIGNMENT_UNOBSERVABLE";return out;}
++      Eigen::MatrixXd scaled=A*norms.cwiseInverse().asDiagonal();
++      Eigen::JacobiSVD<Eigen::MatrixXd> svd(scaled,Eigen::ComputeThinU|Eigen::ComputeThinV);
++      out.singular_ratio=svd.singularValues().tail(1)[0]/svd.singularValues()[0];
++      if(out.singular_ratio<policy.min_singular_ratio){out.reason="ALIGNMENT_UNOBSERVABLE";return out;}
++      x=norms.cwiseInverse().asDiagonal()*svd.solve(b);
++      if(!x.allFinite()){out.reason="NONFINITE_ALIGNMENT";return out;}
++      out.residual=(A*x-b).norm()/std::sqrt(double(A.rows()));
++      // Preserve tentative solver values on rejection for bounded diagnostics.
++      // These fields do not alter the solve, policy or acceptance decision.
++      out.ba=x.segment<3>(3*n+gd);out.scale=x[cols-1];
++      out.velocity=x.segment<3>(3*(n-1));
++      if(iteration==0){g=x.segment<3>(3*n);out.gravity=g;if(std::abs(g.norm()-policy.gravity_mps2)>policy.gravity_tolerance_mps2){out.reason="GRAVITY_BOUND";return out;}}
++      else {g+=basis.leftCols(2)*x.segment<2>(3*n);out.gravity=g;}
++      g=g.normalized()*policy.gravity_mps2;ba=x.segment<3>(3*n+gd);scale=x[cols-1];
++      out.gravity=g;
++    }
++    // Re-evaluate using the normalized final gravity and estimated biases.
++    // Rotating a fixed accelerometer bias must not masquerade as excitation.
++    mean.setZero();
++    for(const auto& p:deltas)mean+=(p.beta-p.jb*ba)/p.dt;
++    mean/=n-1;variance=0;double residual=0;size_t k=0;
++    for(size_t j=1;j<n;++j){const auto& p=deltas[j-1];const double dt=p.dt;
++      variance+=((p.beta-p.jb*ba)/dt-mean).squaredNorm();
++      const V3 vi=x.segment<3>(3*(j-1)),vj=x.segment<3>(3*j);
++      const V3 dp=scale*(poses[j].camera-poses[j-1].camera)
++          -(poses[j].q*t_imu_camera-poses[j-1].q*t_imu_camera);
++      residual+=(dp/dt-vi-.5*g*dt-(p.alpha-p.ja*ba)/dt).squaredNorm();
++      residual+=(vj-vi-g*dt-(p.beta-p.jb*ba)).squaredNorm();k+=6;
++    }
++    out.excitation=std::sqrt(variance/(n-1));out.residual=std::sqrt(residual/k);
++    if(out.excitation<policy.min_excitation_mps2){out.reason="DEBIASED_EXCITATION_LOW";return out;}
++    const V3 initial=scale*poses.front().camera-poses.front().q*t_imu_camera;
++    double travel=0;for(const auto& p:poses)travel=std::max(travel,(scale*p.camera-p.q*t_imu_camera-initial).norm());
++    if(travel<policy.min_imu_translation_m){out.reason="IMU_TRANSLATION_LOW";return out;}
++    out.scale=scale;out.ba=ba;out.gravity=g;out.velocity=x.segment<3>(3*(n-1));
++    if(scale<=0 || scale>100){out.reason="SCALE_BOUND";return out;}
++    if(ba.norm()>policy.max_accel_bias_mps2){out.reason="ACCEL_BIAS_BOUND";return out;}
++    if(out.residual>policy.max_residual_mps){out.reason="ALIGNMENT_RESIDUAL";return out;}
++    out.accepted=true;out.reason="ACCEPTED";return out;
++  }
++};
++}
+--- a/svo/include/svo/schur_vins.h
++++ b/svo/include/svo/schur_vins.h
+@@ -38,6 +38,15 @@
+     void InitObsStddev(double _obs_dev);
+     void InitChi2(double chi2_rate);
+ 
++    void Reset();
++    void InitializeMetric(const svo::FrameBundle::Ptr& frame, const Eigen::Vector3d& velocity,
++                          const Eigen::Vector3d& ba, const Eigen::Vector3d& bg,
++                          const Eigen::Vector3d& gravity);
++    bool MetricReady() const { return stereo || metric_ready_; }
++    // Point::CheckStatus requires three actual local observations. A mono
++    // camera needs three distinct cloned states before that test can succeed.
++    bool MonoClonesPending() const { return !stereo && metric_ready_ && states_map.size() < 3; }
++    bool LastVisualCorrectionAccepted() const { return last_visual_correction_; }
+     void SetKeyframe(const bool _is_keyframe);
+     void Forward(const svo::FrameBundle::Ptr frame_bundle);
+     int Backward(const svo::FrameBundle::Ptr frame_bundle);
+@@ -91,6 +100,10 @@
+     svo::CameraPtr cam0_param = nullptr, cam1_param = nullptr;
+     svo::Transformation T_imu_cam0, T_imu_cam1;
+     bool stereo = false;
++    bool metric_ready_ = false;
++    unsigned epoch_=0;
++    int last_visual_constraints_=0;
++    bool last_visual_correction_=false;
+     svo::LocalPointMap local_pts;
+ 
+     // imu prediction
+--- a/svo/src/frame_handler_base.cpp
++++ b/svo/src/frame_handler_base.cpp
+@@ -353,6 +353,10 @@
+       const int num_imu = imu_measurements.size();
+       frame_bundle->imu_datas_ = imu_measurements;
+       std::reverse(frame_bundle->imu_datas_.begin(), frame_bundle->imu_datas_.end());
++      // Schur and bootstrap run in camera time. Preserve raw callback evidence
++      // above; map IMU timestamps using the explicitly loaded calibration.
++      rm27::event("imu_raw_interval", frame_bundle, {double(frame_bundle->imu_datas_.size()),frame_bundle->imu_datas_.front().timestamp_,frame_bundle->imu_datas_.back().timestamp_,imu_handler_->imu_calib_.delay_imu_cam});
++      for(auto& measurement:frame_bundle->imu_datas_)measurement.timestamp_+=imu_handler_->imu_calib_.delay_imu_cam;
+       frame_bundle->imu_ready_ = true;
+ 
+       // for (const auto& imu_data : frame_bundle->imu_datas_)
+@@ -588,7 +592,7 @@
+   // Reset if we should.
+   if (set_reset_)
+   {
+-    resetVisionFrontendCommon();
++    resetAll();
+     resetBackend();
+   }
+ 
+@@ -692,13 +696,14 @@
+ 
+ #ifdef USE_SCHUR_VINS
+ 
++  if(schur_vins_->MetricReady()) {
+   schurvinsForward();
+   if (options_.trace_statistics) {
+     SVO_STOP_TIMER("sparse_img_align");
+   }
+   return new_frames_->numFeatures();
+-
+-#else
++  }
++#endif
+ 
+   sparse_img_align_->reset();
+   if (have_motion_prior_)
+@@ -722,8 +727,6 @@
+   }
+   VLOG(40) << "Sparse image alignment tracked " << img_align_n_tracked << " features.";
+   return img_align_n_tracked;
+-
+-#endif
+ }
+ 
+ //------------------------------------------------------------------------------
+@@ -870,7 +873,12 @@
+   }
+   size_t sfba_n_edges_final = pose_optimizer_->run(new_frames_, options_.poseoptim_thresh);
+ #else
+-  size_t sfba_n_edges_final = schurvinsBackward();
++  size_t sfba_n_edges_final;
++  if(schur_vins_->MetricReady()) sfba_n_edges_final = schurvinsBackward();
++  else {
++    pose_optimizer_->reset();
++    sfba_n_edges_final = pose_optimizer_->run(new_frames_, options_.poseoptim_thresh);
++  }
+ #endif
+ 
+   if (options_.trace_statistics)
+@@ -928,7 +936,8 @@
+       point->optimize(max_iter, optimize_on_sphere);
+       point->last_structure_optim_ = frame->id_;
+     #else
+-      schur_vins_->StructureOptimize(point);
++      if(schur_vins_->MetricReady()) schur_vins_->StructureOptimize(point);
++      else point->optimize(max_iter, optimize_on_sphere);
+       // point->optimize(max_iter, optimize_on_sphere);
+       point->last_structure_optim_ = frame->id_;
+     #endif
+@@ -1039,6 +1048,10 @@
+ void FrameHandlerBase::resetVisionFrontendCommon()
+ {
+   rm27::event("reset", new_frames_);
++  if(imu_handler_ && (last_frames_ || new_frames_)) imu_handler_->reset();
++#ifdef USE_SCHUR_VINS
++  if(schur_vins_) schur_vins_->Reset();
++#endif
+   stage_ = Stage::kPaused;
+   tracking_quality_ = TrackingQuality::kInsufficient;
+   set_reset_ = false;
+--- a/svo/src/frame_handler_mono.cpp
++++ b/svo/src/frame_handler_mono.cpp
+@@ -9,6 +9,10 @@
+ 
+ #include <svo/frame_handler_mono.h>
+ #include <svo/map.h>
++#include <svo/schur_vins.h>
++#include <set>
++#include <string>
++#include <svo/common/local_feature.h>
+ #include <svo/common/frame.h>
+ #include <svo/common/point.h>
+ #include <svo/img_align/sparse_img_align.h>
+@@ -39,6 +43,30 @@
+ UpdateResult FrameHandlerMono::processFrameBundle()
+ {
+   UpdateResult res = UpdateResult::kFailure;
++  if(stage_ == Stage::kInitializing && geometric_ready_)
++  {
++    res=processFrame();
++    if(res!=UpdateResult::kFailure) {
++      if(!schur_vins_->MetricReady()) {
++        mono_alignment_.add(new_frames_);
++        if(!mono_alignment_.poses.empty()) { const auto& p=mono_alignment_.poses.back();
++          rm27::event("mono_bootstrap_pose",new_frames_,{p.q.w(),p.q.x(),p.q.y(),p.q.z(),p.camera.x(),p.camera.y(),p.camera.z()}); }
++        tryMetricInitialization();
++      } else if(schur_vins_->LastVisualCorrectionAccepted()) {
++        // Metric alignment alone is not a visual filter update. Publish only
++        // after mature, real mono observations caused an accepted Schur update.
++        stage_=Stage::kTracking;
++        rm27::event("mono_tracking_ready",new_frames_);
++      }
++    } else {
++      // Geometric bootstrap loss cannot escape through the tracking recovery
++      // path and publish an arbitrary-scale pose. Restart on the next callback.
++      rm27::event("mono_bootstrap_restart_requested",new_frames_);
++      set_start_=true;stage_=Stage::kInitializing;tracking_quality_=TrackingQuality::kInsufficient;
++      return UpdateResult::kDefault;
++    }
++    return res;
++  }
+   if(stage_ == Stage::kTracking)
+   {
+     res = processFrame();
+@@ -76,7 +104,7 @@
+   const auto res = initializer_->addFrameBundle(new_frames_);
+ 
+   rm27::event("mono_geometric_init", new_frames_, {double(res), double(newFrame()->numFeatures()), new_frames_->get_T_W_B().getPosition().x(), new_frames_->get_T_W_B().getPosition().y(), new_frames_->get_T_W_B().getPosition().z()});
+-  if(res == InitResult::kTracking)
++  if(res != InitResult::kSuccess)
+     return UpdateResult::kDefault;
+ 
+   // make old frame keyframe
+@@ -112,7 +140,11 @@
+   map_->addKeyframe(newFrame(),
+                     bundle_adjustment_type_==BundleAdjustmentType::kCeres);
+   rm27::event("mono_geometric_commit", new_frames_);
+-  stage_ = Stage::kTracking;
++  geometric_ready_ = true;
++  mono_alignment_.reset();
++  mono_alignment_.add(new_frames_);
++  if(!mono_alignment_.poses.empty()) { const auto& p=mono_alignment_.poses.back();
++    rm27::event("mono_bootstrap_pose",new_frames_,{p.q.w(),p.q.x(),p.q.y(),p.q.z(),p.camera.x(),p.camera.y(),p.camera.z()}); }
+   tracking_quality_ = TrackingQuality::kGood;
+   initializer_->reset();
+   VLOG(1) << "Init: Selected second frame, triangulated initial map.";
+@@ -149,14 +181,28 @@
+   if(bundle_adjustment_type_!=BundleAdjustmentType::kCeres)
+   {
+     VLOG(40) << "===== Pose Optimization =====";
++    const size_t reprojected_observations=n_total_observations;
+     n_total_observations = optimizePose();
+-    if(n_total_observations < options_.quality_min_fts)
++    if(schur_vins_->MonoClonesPending())
+     {
+-      LOG(WARNING) << "Not enough feature after pose optimization."
+-                   << n_total_observations;
+-      return UpdateResult::kFailure;
+-    }
+-    optimizeStructure(new_frames_, options_.structure_optimization_max_pts, 5);
++      // The frontend just matched these features in the actual image. With
++      // fewer than three mono clones no point can yet satisfy MIN_OBS=3.
++      // Keep that feature association alive without inventing a filter update:
++      // pose, FEJ states and covariance remain the same propagated Schur prior.
++      rm27::event("mono_clone_warmup",new_frames_,
++                   {double(reprojected_observations),double(n_total_observations)});
++      n_total_observations=reprojected_observations;
++    }
++    else
++    {
++      if(n_total_observations < options_.quality_min_fts)
++      {
++        LOG(WARNING) << "Not enough feature after pose optimization."
++                     << n_total_observations;
++        return UpdateResult::kFailure;
++      }
++      optimizeStructure(new_frames_, options_.structure_optimization_max_pts, 5);
++    }
+   }
+ 
+   // return if tracking bad
+@@ -268,7 +314,8 @@
+   if(res == UpdateResult::kDefault)
+   {
+     // Reset to default mode.
+-    stage_ = Stage::kTracking;
++    stage_ = schur_vins_->MetricReady() && schur_vins_->LastVisualCorrectionAccepted()
++        ? Stage::kTracking : Stage::kInitializing;
+     relocalization_n_trials_ = 0;
+     VLOG(1) << "Relocalization successful.";
+   }
+@@ -280,8 +327,86 @@
+   return res;
+ }
+ 
++bool FrameHandlerMono::tryMetricInitialization() {
++  const auto result=mono_alignment_.solve(cams_->get_T_C_B(0).inverse().getPosition());
++  if(mono_alignment_.poses.size()>=mono_alignment_.policy.min_frames) {
++    rm27::event("mono_alignment_attempt",new_frames_,{double(result.accepted),result.scale,result.excitation,result.residual,result.singular_ratio,result.gravity.norm(),result.ba.norm(),result.bg.norm()});
++    if(!result.accepted)rm27::event((std::string("mono_alignment_rejected_")+result.reason).c_str(),new_frames_);
++  }
++  if(!result.accepted)return false;
++  transformMetricMap(result);
++  const Eigen::Quaterniond rotation=Eigen::Quaterniond::FromTwoVectors(result.gravity,Eigen::Vector3d(0,0,-1));
++  schur_vins_->InitializeMetric(new_frames_, rotation*result.velocity,result.ba,result.bg,rotation*result.gravity);
++  imu_handler_->setGyroscopeBias(result.bg);imu_handler_->setAccelerometerBias(result.ba);
++  schurvinsBackward();
++  stage_=Stage::kInitializing;tracking_quality_=TrackingQuality::kGood;
++  rm27::event("mono_metric_initialized",new_frames_,{result.scale,result.excitation,result.residual,result.singular_ratio});
++  return true;
++}
++
++void FrameHandlerMono::transformMetricMap(const rm27::MonoAlignmentResult& result) {
++  depth_filter_->stopThread();depth_filter_->reset();
++  const Eigen::Quaterniond rotation=Eigen::Quaterniond::FromTwoVectors(result.gravity,Eigen::Vector3d(0,0,-1));
++  const double scale=result.scale;
++  const Eigen::Vector3d origin=mono_alignment_.poses.front().camera*scale
++      -mono_alignment_.poses.front().q*cams_->get_T_C_B(0).inverse().getPosition();
++  const Eigen::Vector3d translation=-(rotation*origin);
++  std::vector<FramePtr> frames;std::set<Frame*> visited;std::set<PointPtr> points;
++  const auto include=[&](const FramePtr& frame) {
++    if(frame && visited.insert(frame.get()).second)frames.push_back(frame);
++  };
++  for(const auto& k:map_->keyframes_)include(k.second);
++  for(const auto& f:new_frames_->frames_)include(f);
++  if(last_frames_)for(const auto& f:last_frames_->frames_)include(f);
++  for(const auto& overlap:overlap_kfs_)for(const auto& f:overlap)include(f);
++  for(const auto& reprojector:reprojectors_)
++    for(const auto& c:reprojector->candidates_)include(c.ref_frame);
++  // A removed keyframe can remain the owner of a seed referenced by a live
++  // frontend frame. Collect the full reachable ownership closure first so each
++  // pose and inverse-depth distribution changes world scale exactly once.
++  for(size_t i=0;i<frames.size();++i) {
++    const FramePtr frame=frames[i];
++    for(size_t k=0;k<frame->numFeatures();++k)include(frame->seed_ref_vec_[k].keyframe);
++  }
++  for(const auto& f:frames){
++    const Transformation old=f->T_world_cam();
++    f->T_f_w_=Transformation(rotation*old.getEigenQuaternion(),rotation*(scale*old.getPosition())+translation).inverse();
++    bool has_seeds=false;
++    for(size_t k=0;k<f->numFeatures();++k)
++      has_seeds=has_seeds||(isSeed(f->type_vec_[k]) && !f->seed_ref_vec_[k].keyframe);
++    if(has_seeds)f->seed_mu_range_/=scale;
++    for(size_t k=0;k<f->numFeatures();++k){
++      // Reprojected seed proxies have no initialized inverse-depth storage.
++      // Only their owner keyframe owns the distribution being rescaled.
++      if(isSeed(f->type_vec_[k]) && !f->seed_ref_vec_[k].keyframe){
++        f->invmu_sigma2_a_b_vec_(0,k)/=scale;
++        f->invmu_sigma2_a_b_vec_(1,k)/=(scale*scale);
++      }
++      if(f->landmark_vec_[k])points.insert(f->landmark_vec_[k]);
++    }
++    for(auto& k:f->key_pts_)k.second=rotation*(scale*k.second)+translation;
++  }
++  for(const auto& p:points){
++    p->pos_=rotation*(scale*p->pos_)+translation;
++    if(p->normal_set_)p->normal_=rotation*p->normal_;
++    p->local_obs_.clear();p->state_factors.clear();p->register_id_=-1;
++    p->V.setZero();p->Vinv.setZero();p->gv.setZero();p->W.setZero();p->ekf_init=false;
++  }
++  depth_median_*=scale;depth_min_*=scale;depth_max_*=scale;
++  // Keep mono depth updates synchronous after the atomic bootstrap. This explicit
++  // derivative choice avoids racing seed storage while changing world scale.
++}
++
+ void FrameHandlerMono::resetAll()
+ {
++  geometric_ready_ = false;
++  mono_alignment_.reset();
++  // A fresh metric bootstrap must use its configured bias priors, not the
++  // previous epoch's estimated biases retained by ImuHandler::reset().
++  if(imu_handler_) {
++    imu_handler_->setGyroscopeBias(imu_handler_->imu_init_.omega_bias);
++    imu_handler_->setAccelerometerBias(imu_handler_->imu_init_.acc_bias);
++  }
+   if(bundle_adjustment_type_==BundleAdjustmentType::kCeres)
+   {
+     // with the ceres backend we have to make sure to initialize the scale
+--- a/svo/src/schur_vins.cpp
++++ b/svo/src/schur_vins.cpp
+@@ -28,6 +28,44 @@
+ 
+ SchurVINS::SchurVINS() : curr_state(new ImuState()) {
+     // LOG(INFO) << "init begins";
++}
++
++void SchurVINS::Reset() {
++    ++epoch_;last_visual_constraints_=0;last_visual_correction_=false;
++    states_map.clear(); local_pts.clear(); schur_pts_.clear();
++    curr_state.reset(new ImuState()); prev_imu_ts = -1;
++    prev_acc.setZero(); prev_gyr.setZero(); id_creator = 0;
++    curr_fts_cnt = 0; metric_ready_ = false; InitCov();
++}
++
++void SchurVINS::InitializeMetric(const svo::FrameBundle::Ptr& frame,
++        const Eigen::Vector3d& velocity, const Eigen::Vector3d& ba,
++        const Eigen::Vector3d& bg, const Eigen::Vector3d& g) {
++    const auto epoch=epoch_;Reset();epoch_=epoch;
++    curr_state->ts = frame->getMinTimestampSeconds();
++    curr_state->quat = frame->get_T_W_B().getEigenQuaternion();
++    curr_state->pos = frame->get_T_W_B().getPosition();
++    curr_state->vel = velocity; curr_state->ba = ba; curr_state->bg = bg; gravity = g;
++    curr_state->quat_fej = curr_state->quat; curr_state->pos_fej = curr_state->pos;
++    curr_state->vel_fej = curr_state->vel;
++    // Conservative bootstrap covariance. This is not a calibrated output covariance.
++    cov.block<3,3>(0,0) = Eigen::Matrix3d::Identity() * .01;
++    cov.block<3,3>(3,3) = Eigen::Matrix3d::Identity() * .1;
++    cov.block<3,3>(6,6) = Eigen::Matrix3d::Identity() * 1.;
++    cov.block<3,3>(9,9) = Eigen::Matrix3d::Identity() * .25;
++    cov.block<3,3>(12,12) = Eigen::Matrix3d::Identity() * .01;
++    const auto& samples=frame->imu_datas_;
++    for(size_t i=1;i<samples.size();++i) {
++        if(samples[i-1].timestamp_<=curr_state->ts && samples[i].timestamp_>=curr_state->ts) {
++            const double w=(curr_state->ts-samples[i-1].timestamp_)/(samples[i].timestamp_-samples[i-1].timestamp_);
++            prev_acc=(1-w)*samples[i-1].linear_acceleration_+w*samples[i].linear_acceleration_;
++            prev_gyr=(1-w)*samples[i-1].angular_velocity_+w*samples[i].angular_velocity_;
++            prev_imu_ts=curr_state->ts;break;
++        }
++    }
++    CHECK(prev_imu_ts>=0); curr_state->acc=prev_acc-ba; curr_state->gyr=prev_gyr-bg;
++    metric_ready_=true;
++    rm27::event("metric_filter_commit",frame,{curr_state->ts, velocity.x(), velocity.y(), velocity.z(),ba.x(),ba.y(),ba.z(),bg.x(),bg.y(),bg.z()});
+ }
+ 
+ void SchurVINS::InitCov() {
+@@ -213,14 +251,16 @@
+ 
+ void SchurVINS::Solve3() {
+     const int state_size = (int)states_map.size();
+-    if (state_size < 2) {
+-        LOG(INFO) << "only one window, bypass solve()";
++    if (state_size < 2 || MonoClonesPending()) {
++        // Do not run the singular zero-measurement update while real mono
++        // observations are still accumulating. Prediction/augmentation stand.
++        LOG(INFO) << "insufficient cloned observations, bypass solve()";
+         return;
+     }
+ 
+     const int min_frame_idx = states_map.begin()->second->frame_bundle->getBundleId();
+     const int prev_frame_id0 = (++states_map.rbegin())->second->frame_bundle->frames_[0]->id(),
+-              prev_frame_id1 = (++states_map.rbegin())->second->frame_bundle->frames_[1]->id();
++              prev_frame_id1 = stereo ? (++states_map.rbegin())->second->frame_bundle->frames_.at(1)->id() : prev_frame_id0;
+     const int max_frame_idx = states_map.rbegin()->second->frame_bundle->getBundleId();
+ 
+     const int state_len = state_size * 6;
+@@ -246,8 +286,10 @@
+             curr_pt->register_id_ = curr_state_id;  // avoid init multi times
+         }
+ 
++        // local_obs_ is keyed by cloned state ID, not the unrelated image
++        // bundle ID (which does not restart when metric initialization resets).
+         if (curr_pt->CheckStatus() == false || curr_pt->CheckLocalStatus() == false
+-            || curr_pt->CheckLocalStatus(prev_frame_id0, prev_frame_id1, max_frame_idx) == false) {
++            || curr_pt->CheckLocalStatus(prev_frame_id0, prev_frame_id1, curr_state_id) == false) {
+             // LOG(INFO) << "Solve2 pass invalid point: " << curr_pt->id()
+             //           << " feature num : " << curr_pt->local_obs_.size() << " pos: " <<
+             //           curr_pt->pos().transpose();
+@@ -419,6 +461,7 @@
+     // LOG(INFO) << "Bvct:\n" << Bvct;
+     StateUpdate(Amtx, Bvct);
+ 
++    last_visual_constraints_=num_obs;
+     // LOG(ERROR) << "total local pts: " << local_pts.size() << " schur pts: " << schur_pts_.size();
+ }
+ 
+@@ -741,6 +784,7 @@
+ }
+ 
+ int SchurVINS::Backward(const svo::FrameBundle::Ptr frame_bundle) {
++    last_visual_constraints_=0;last_visual_correction_=false;
+     rm27::event("schur_backward_begin", frame_bundle, {double(states_map.size())});
+     AugmentState(frame_bundle);
+     RegisterPoints(frame_bundle);
+@@ -783,6 +827,11 @@
+         // LOG(INFO) << "gravity: " << gravity[0] << ", " << gravity[1] << ", " << gravity[2];
+     }
+ 
++    if(last_visual_constraints_>0 && num_valid_feature>0 && curr_state->pos.allFinite()
++       && curr_state->quat.coeffs().allFinite() && curr_state->vel.allFinite()) {
++      last_visual_correction_=true;
++      rm27::event("schur_visual_correction",frame_bundle,{double(last_visual_constraints_),curr_state->pos.x(),curr_state->pos.y(),curr_state->pos.z(),curr_state->quat.w(),curr_state->quat.x(),curr_state->quat.y(),curr_state->quat.z(),curr_state->vel.x(),curr_state->vel.y(),curr_state->vel.z(),curr_state->ba.x(),curr_state->ba.y(),curr_state->ba.z(),curr_state->bg.x(),curr_state->bg.y(),curr_state->bg.z(),gravity.x(),gravity.y(),gravity.z(),double(epoch_)});
++    }
+     rm27::event("schur_backward_end", frame_bundle, {double(num_valid_feature), double(states_map.size())});
+     return num_valid_feature;
+ }
+--- a/svo_ros/src/svo_factory.cpp
++++ b/svo_ros/src/svo_factory.cpp
+@@ -455,6 +455,25 @@
+         loadTrackerOptions(pnh),
+         ncam);
+ 
++  // RM27 bootstrap thresholds are software test policy, not flight safety limits.
++  rm27::MonoAlignmentPolicy policy;
++  policy.min_frames=vk::param<int>(pnh,"rm27_init_min_frames",31);
++  policy.max_frames=vk::param<int>(pnh,"rm27_init_max_frames",61);
++  policy.min_span_s=vk::param<double>(pnh,"rm27_init_min_span_s",1.5);
++  policy.max_imu_gap_s=vk::param<double>(pnh,"rm27_init_max_imu_gap_s",.015);
++  policy.min_excitation_mps2=vk::param<double>(pnh,"rm27_init_min_excitation_mps2",.25);
++  policy.gravity_mps2=vk::param<double>(pnh,"rm27_init_gravity_mps2",9.81007);
++  policy.gravity_tolerance_mps2=vk::param<double>(pnh,"rm27_init_gravity_tolerance_mps2",1.0);
++  policy.max_gyro_bias_rps=vk::param<double>(pnh,"rm27_init_max_gyro_bias_rps",.2);
++  policy.max_accel_bias_mps2=vk::param<double>(pnh,"rm27_init_max_accel_bias_mps2",1.0);
++  policy.max_residual_mps=vk::param<double>(pnh,"rm27_init_max_residual_mps",.05);
++  policy.min_singular_ratio=vk::param<double>(pnh,"rm27_init_min_singular_ratio",1e-6);
++  CHECK(policy.min_frames>=10 && policy.max_frames>=policy.min_frames);
++  CHECK(policy.min_span_s>0 && policy.max_imu_gap_s>0 && policy.min_excitation_mps2>0);
++  policy.max_rotation_residual_rad=vk::param<double>(pnh,"rm27_init_max_rotation_residual_rad",.02);
++  policy.min_imu_translation_m=vk::param<double>(pnh,"rm27_init_min_imu_translation_m",.05);
++  vo->setMonoAlignmentPolicy(policy);
++
+   // Get initial position and orientation of IMU
+   setInitialPose(pnh, *vo);
+ 
