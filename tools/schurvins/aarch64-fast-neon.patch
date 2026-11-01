@@ -1,0 +1,42 @@
+--- a/include/fast/faster_corner_utilities.h
++++ b/include/fast/faster_corner_utilities.h
+@@ -1,7 +1,7 @@
+ #ifndef FAST_CORNER_UTILITIES_H
+ #define FAST_CORNER_UTILITIES_H
+ 
+-#if __ARM_NEON__
++#if defined(__ARM_NEON__) || defined(__ARM_NEON)
+ #include <arm_neon.h>
+ #elif __SSE2__
+ #include <emmintrin.h>
+@@ -40,7 +40,7 @@
+    }
+ };
+ 
+-#if __ARM_NEON__
++#if defined(__ARM_NEON__) || defined(__ARM_NEON)
+ 
+ // FIXXXME: there is a VCEQ instruction that compares to #0 by default,
+ // so we could get rid of the zero register. However, I didn't find
+--- a/src/faster_corner_9_neon.cpp
++++ b/src/faster_corner_9_neon.cpp
+@@ -2,7 +2,7 @@
+ #include <fast/corner_9.h>
+ #include <fast/faster_corner_utilities.h>
+ 
+-#ifndef __ARM_NEON__
++#if !defined(__ARM_NEON__) && !defined(__ARM_NEON)
+ #  error "This file requires NEON support. Check your compiler flags."
+ #else
+ #  include <arm_neon.h>
+--- a/test/test.cpp
++++ b/test/test.cpp
+@@ -62,7 +62,7 @@
+    printf("PLAIN version took %f seconds (average over %d trials).\n", time_accumulator/((double)NUM_TRIALS), NUM_TRIALS );
+    std::cout << std::endl << "Fast feature detector test: "<< corners.size() << " features detected." << std::endl;
+ 
+-#if __ARM_NEON__
++#if defined(__ARM_NEON__) || defined(__ARM_NEON)
+    std::cout << "Testing NEON version" << std::endl;
+    time_accumulator = 0;
+    for (int i = 0; i < NUM_TRIALS; ++i) {

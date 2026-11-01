@@ -1,0 +1,16 @@
+# Offline comparison transport only; native OpenVINS subscription QoS is unchanged.
+/cam0/image_raw:
+  history: keep_last
+  depth: 100
+  reliability: reliable
+  durability: volatile
+/cam1/image_raw:
+  history: keep_last
+  depth: 100
+  reliability: reliable
+  durability: volatile
+/imu0:
+  history: keep_last
+  depth: 10000
+  reliability: reliable
+  durability: volatile

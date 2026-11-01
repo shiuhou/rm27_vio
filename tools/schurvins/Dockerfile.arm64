@@ -1,0 +1,14 @@
+# Native ARM64 reference image. On x86 use arm64.py (explicit local emulation),
+# or a separately configured ARM64 builder. This file never registers binfmt.
+ARG BASE_IMAGE=ros@sha256:85d442cdcc1b530d401b56f5e80aba6582fdc0764e36e72cc5dab6dcf6c5642a
+FROM ${BASE_IMAGE}
+ENV DEBIAN_FRONTEND=noninteractive
+COPY packages.arm64.lock /opt/schurvins-packages.arm64.lock
+RUN test "$(dpkg --print-architecture)" = arm64 \
+    && apt-get -o Acquire::Retries=1 update \
+    && awk '{print $1 "=" $2}' /opt/schurvins-packages.arm64.lock \
+       | xargs apt-get -o Acquire::Retries=1 install -y --no-install-recommends \
+    && dpkg-query -W > /opt/schurvins-packages.txt \
+    && diff -u /opt/schurvins-packages.arm64.lock /opt/schurvins-packages.txt \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /ws

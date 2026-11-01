@@ -1,9 +1,9 @@
-"""OpenVINS observations; missing tracking/reset evidence stays UNKNOWN."""
+"""VIO observations; missing tracking/reset evidence stays UNKNOWN."""
 from dataclasses import asdict, dataclass
 import json
 from .common import canonical, require, number
 
-STATE_MAP = {'OpenVINS': {}}
+STATE_MAP = {'OpenVINS': {}, 'SchurVINS': {}}
 
 
 def normalized_state(backend, raw):
