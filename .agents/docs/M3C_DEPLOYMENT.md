@@ -1,5 +1,11 @@
 # M3C SchurVINS deployment evidence
 
+For the laptop physically connected to M3C, follow the
+[laptop test and return runbook](M3C_LAPTOP_HANDOFF.md). It covers the separate
+checked runtime/data transfer, board identity and ABI checks, mono diagnostics,
+and raw-result handoff to this development host. Git pull alone does not include
+the binary or public dataset. No laptop/board results have been received yet.
+
 This is the independent M3C branch result dated 2026-10-31. The
 [shared integration record](SCHURVINS_INTEGRATION.md) describes the imported
 SchurVINS research baseline; it is not evidence of execution on M3C.

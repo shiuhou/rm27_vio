@@ -16,8 +16,10 @@ outputs stay outside Git. Every build/run output directory must be new.
 
 On `research/m3c-vio`, use the independent external research directory shown
 below. The RK3576 worktree and `/home/shiuhou/Projects/rm27-schurvins-research`
-are read-only recovery/comparison sources. Board connection is paused at the
-user's request. Offline software work does not authorize capture or UART access.
+are read-only recovery/comparison sources. This development host does not connect
+to the board. The user will test from the laptop connected to M3C; follow the
+[laptop test and raw-result return runbook](../../.agents/docs/M3C_LAPTOP_HANDOFF.md).
+Offline software work does not authorize capture or UART access.
 
 The implemented [ROS-free C++ runtime](headless/README.md) rebuilds the estimator
 without ROS and runs ordered ASL camera/IMU inputs. Native process measurements

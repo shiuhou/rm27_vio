@@ -16,6 +16,7 @@ work remains in its separate worktree. Publication is authorized only to
 
 ## Start here
 
+- [M3C laptop 測試與結果回傳操作手冊](.agents/docs/M3C_LAPTOP_HANDOFF.md)
 - [Current handoff](HANDOFF.md)
 - [VIO scope and plan](new_plan.md)
 - [Resume guide](rm27/perception/vision/docs/CODEX_RESUME.md)
