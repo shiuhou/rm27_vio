@@ -7,8 +7,9 @@ on `legacy/slam` at `74d44b09c65e2a839b74d834756f0d178207d679`.
 They are not supported by the main-branch runner.
 
 This worktree is the independent `research/m3c-vio` deployment branch. The
-[SchurVINS integration record](.agents/docs/SCHURVINS_INTEGRATION.md) contains
-its measured PC/ARM64 results and separate M3C acceptance. The
+[M3C deployment report](.agents/docs/M3C_DEPLOYMENT.md) contains measured
+PC/ARM64 results and actual M3C acceptance; the
+[integration record](.agents/docs/SCHURVINS_INTEGRATION.md) preserves the shared baseline. The
 [ROS-free C++ runtime](tools/schurvins/headless/README.md), read-only M3C audit
 and native benchmark are reusable on other Linux ARM64 targets. Original RK3576
 work remains in its separate worktree. Publication is authorized only to

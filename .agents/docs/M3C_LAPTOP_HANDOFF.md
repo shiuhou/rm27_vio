@@ -11,10 +11,10 @@
   不修改任何 RK3576 worktree，不 merge、不強制 push、不改其他分支。
 - 本輪測試用 EuRoC 錄製的單目影像＋IMU。飛控即使已接線，也不是這輪的資料來源。
   不開 UART、不發 MAVLink 到實體飛控、不啟動相機採集、不執行舊硬體協調腳本。
-- **單目已知 FAIL**：PC 和 ARM64 QEMU 完整 V1_01 均只有一個 pose，然後失鎖，
-  metric initialization 未驗證。這次板測可以重現失敗和量測資源，不能預設會修好。
+- **單目已知 FAIL**：PC、ARM64 QEMU 及實際 M3C 完整 V1_01 均只有一個 pose，然後失鎖，
+  metric initialization 未驗證。下列命令可重現失敗和量測資源，不能預設會修好。
   雙目資料僅作軟體控制組，不能算 OS04A10 單目通過。
-- ARM64 包是 Bionic 參考 ABI；實際 M3C 目前僅確認 `--help`，尚無 estimator 回放。
+- ARM64 包是 Bionic 參考 ABI；實際 M3C 已完成完整 estimator 回放，但單目 FAIL。
   每輪仍先辨識設備、校驗包及驗證啟動。
   不替換系統 libc／loader、不全域安裝函式庫、不改韌體、EKF、串口或相機設定。
 - 新 Camera 採集仍需使用者明確授權。物理 UART 測試還需確認拆槳、Disarmed、
@@ -23,12 +23,20 @@
   DT 顯示 MaixCAM2 不能證明載板沿用標準板的 IMU、I²C bus 或地址。
   接線、SPI／I²C、DRDY、時鐘及驅動仍待原理圖／實機證據；本輪不開啟它。
 
-上一輪 `m3c-20261101T164018Z` 的原始包已回傳主機並通過校驗：板端 inventory、
+第一輪 `m3c-20261101T164018Z` 的原始包已回傳主機並通過校驗：板端 inventory、
 6,226 檔案校驗及 `--help` PASS，estimator 尚未啟動，因缺 GNU time 而 BLOCKED。
 舊結果不改寫。下列流程已將執行與資源測量拆開，另有第 5.1 節的小工具包。
-更新程式後建立新 session；不要在舊 session 重跑 `mkdir runs` 或覆蓋輸出。
+第二輪 `m3c-20261102T080438Z` 已在板端完成 unpaced／0.5×／1× 四次完整回放，
+GNU time 及 Linux sampler 也成功。主機校驗原始包及 130 個檔案，重新評分結果仍為
+FAIL：每次 2,912 張影像、29,120 筆 IMU，只有一個 pose／一次失鎖，ATE／RPE 無法計算。
+PC 與板端都在來源時間 5.50 秒進入 Tracking、5.55 秒重定位、5.80 秒 Paused。
+下一步先在開發主機修正並驗證單目 metric initialization 與首個有效視覺更新；
+本次文件更新沒有提供已修好的 runtime，也不要求 laptop 再跑相同包。
+完整證據與判定只維護在 [M3C_DEPLOYMENT.md](M3C_DEPLOYMENT.md)。
+後續若收到經主機驗證的新 runtime，再核對其新 manifest 並建立新 session；
+不要在舊 session 重跑 `mkdir runs` 或覆蓋輸出。
 
-可直接給 laptop Codex 的任務：
+後續有新測試包或明確重現需求時，可直接給 laptop Codex 的任務：
 
 > 閱讀 AGENTS.md 和 .agents/docs/M3C_LAPTOP_HANDOFF.md，依序完成本文件的
 > laptop 準備、M3C 唯讀審計、參考包啟動、單目離線及 0.5×／1× 診斷，保留所有

@@ -4,11 +4,14 @@ For the laptop physically connected to M3C, follow the
 [laptop test and return runbook](M3C_LAPTOP_HANDOFF.md). It covers the separate
 checked runtime/data transfer, board identity and ABI checks, mono diagnostics,
 and raw-result handoff to this development host. Git pull alone does not include
-the binary or public dataset. The first laptop return has now been received and
-reviewed; it establishes inventory, transferred-file integrity and loader/help,
-but no estimator launch or board resource measurement.
+the binary or public dataset. The second laptop return, session
+`m3c-20261102T080438Z`, establishes actual M3C execution and resource measurements.
+All four complete monocular runs **FAIL**: one pose, one tracking loss and no
+verified metric initialization. Host scoring confirms ATE/RPE are unevaluable.
+The next software gate is a corrected, validated PC monocular baseline before
+issuing a replacement ARM64 runtime; repeating this unchanged package is not a fix.
 
-This records the independent M3C pre-board baseline and the first laptop return. The
+This records the independent baseline and both actual M3C laptop returns. The
 [shared integration record](SCHURVINS_INTEGRATION.md) describes the imported
 SchurVINS research baseline; it is not evidence of execution on M3C.
 OpenVINS and the RK3576 worktree remain separate and unchanged by this task.
@@ -19,17 +22,19 @@ OpenVINS and the RK3576 worktree remain separate and unchanged by this task.
 |---|---|---|
 | Independent PC ROS build | PASS | All 26 packages built from the pinned dependency closure |
 | PC ROS-free C++ build | PASS | Real estimator/SVO sources, no ROS dynamic libraries |
-| ARM64 ROS-free C++ reference build | PASS | AArch64 ELF, GNU 7.5/Bionic reference sysroot; target ABI compatibility unknown |
+| ARM64 ROS-free C++ reference build | PASS | AArch64 ELF, GNU 7.5/Bionic reference sysroot; this checked package now also executes on the observed M3C |
 | ARM64 execution under QEMU | PASS stereo numerical replay / FAIL mono | Checked runtime: full 2912 images / 29120 IMU; stereo 2911 poses, zero loss; mono one pose and loss |
 | Full PC mono V1_01 / V1_03, ROS runner | FAIL | Trajectory not evaluable; process exit zero is insufficient |
 | Full PC mono V1_01, ROS-free runtime | FAIL | 2912 cameras, 29120 IMU samples admitted, one pose and one tracking loss |
 | Full PC stereo V1_01 at 1× | PASS for numerical replay | 2911 poses, one explicit input-prefix rejection, no observed tracking exit |
 | Actual M3C identity / OS / SDK inventory | PASS inventory / PARTIAL SDK | Laptop confirmed attached device; observed MaixCAM2 DT, axera,ax620e, AArch64 Linux; SDK candidate paths are not SDK qualification |
 | Actual M3C checked package / loader help | PASS | 6,226 file hashes match; checked binary `--help` exits zero, not an estimator replay |
-| M3C offline / 0.5× / 1× replay | BLOCKED in first session | Missing GNU time stopped old runbook before estimator launch; next procedure separates execution and measurement |
-| Real OS04A10 + IMU VIO | NOT_RUN | Device access, timing and qualified input chain unavailable |
+| M3C unpaced offline replay | PASS execution / FAIL estimator | Full V1_01 input, one pose and loss; fixed-scale accuracy unevaluable |
+| M3C paced 0.5× / 1× replay | PASS execution / FAIL estimator | Three complete paced runs including sampled 0.5×; same failure boundary, not live sensor operation |
+| M3C native resource measurement | PASS measurement only | Private GNU time and Linux sampler work; measurements describe the failed mono pipeline |
+| Real OS04A10 + IMU VIO | NOT_RUN | New capture needs authorization; timing/calibration/input chain unqualified |
 | Physical PX4 UART | NOT_RUN | Safety/configuration confirmations required |
-| 60-minute qualified VIO endurance | NOT_RUN | Requires a valid mono baseline and actual target access |
+| 60-minute qualified VIO endurance | NOT_RUN | Requires a valid mono baseline; short failed replays do not qualify |
 
 Numerical replay PASS is scoped to complete selected public-data execution,
 fixed-scale scoring and observed output continuity. It does not establish
@@ -62,9 +67,9 @@ runs are preserved. The checked ARM64 package at
 parameters, calibration and notices, about 148 MB total. Its wrapper was tested
 with a relocated path containing spaces; post-replay hashes verify both bundles
 unchanged. The ARM64 compiler/sysroot and opengv artifacts were read from the
-existing reference research without changing them. The first laptop inventory
-below supplies observed RAM, Linux, libc and device owners; complete estimator
-ABI execution, SDK and custom carrier qualification remain pending.
+existing reference research without changing them. The laptop returns below
+supply observed RAM, Linux, libc and device owners. The checked runtime completed
+actual target estimator execution; SDK and custom carrier qualification remain pending.
 
 The [standalone C++ runtime](../../tools/schurvins/headless/README.md) replaces
 the ROS parameter/factory/input/output boundary with YAML and ASL input. It
@@ -111,6 +116,26 @@ main observed limitation, and does not prove a specific frontend code defect.
 Truth was never given to VIO. No scale fit, threshold, covariance or estimator
 math change was used to force acceptance. The reproducible diagnosis and hashes
 are in `R/mono-diagnosis/provenance.json`. Mono remains **FAIL**.
+
+The second board return localizes the unchanged runtime's failure more precisely.
+PC and all five board diagnostics have identical source-index transitions:
+camera index 110 / 5.50 s enters Tracking, index 111 / 5.55 s enters
+Relocalization, index 116 / 5.80 s returns to Paused (indices start at zero).
+The complete runs then remain paused for the rest of the source sequence.
+The first Schur Forward event has state timestamp -1 and zero position;
+`FrameHandlerMono::processFirstFrame` committed the geometric map without a
+metric handoff. In `SchurVINS::Forward`, `InitState` starts from the current
+accelerometer with zero position/velocity and writes the propagated state into
+the camera pose. The subsequent first reprojection retains only 1–2 matches,
+below the unchanged minimum 40, and fails before any Schur Backward call.
+
+This source call path and failure boundary are observed on both architectures.
+They identify an initialization handoff defect to address, but do not prove a
+minimal numerical repair or that every visual failure has that sole cause.
+The previously tested metric candidate still fails its visual/IMU consistency
+checks; simply assigning the arbitrary-scale pose to the filter would not
+establish metric initialization. No estimator, scale, calibration, threshold or
+automatic-restart change was introduced in reviewing the return.
 
 ## Measured PC performance
 
@@ -178,13 +203,15 @@ not replace a five-repeat V1_03 acceptance cohort. Checked PC mono still failed.
 
 ## Software verification
 
-The complete local suite passed **583 tests**, using the existing compatible
+The complete local suite most recently passed **587 tests**, using the existing compatible
 OpenCV 5 environment and sourced ROS2, with the checked C++ binary supplied
 through `SCHURVINS_HEADLESS_TEST_COMMAND`; no C++ boundary tests were skipped.
-The seven compiled boundary tests were rerun after the final test-portability
-edit. An earlier system-Python run had 520 passes and one pre-existing ChArUco
+This includes all seven compiled boundary tests. The latest rerun accompanies
+the second return at `R/incoming/reviewed-sessions/m3c-20261102T080438Z/host-regression-junit.xml`.
+The earlier 583-test result predates four private-resource-tool checks.
+An earlier system-Python run had 520 passes and one pre-existing ChArUco
 API failure; its evidence remains in `R/baseline-software.json`. No test was
-removed or weakened. Final results are in `R/final-software-junit.xml` and
+removed or weakened. Original baseline results remain in `R/final-software-junit.xml` and
 `R/headless/final-cpp-boundary-junit.xml`.
 
 The evaluator now requires the native summary schema and typed counts,
@@ -195,6 +222,10 @@ stereo runs were rescored into separate reviewed results; failed mono stays FAIL
 is recorded in `R/source-protection-final.json`: original HEAD/branch are
 unchanged; other-task concurrent dirty-file changes are observed, not reverted.
 The parent drone repository report is deliberately untouched.
+The second return's read-only source-protection check is retained alongside its
+derived results as `source-protection.json`: original HEAD/branch still match
+the import baseline, while concurrent work on protected files is recorded and
+left untouched.
 
 ## OS04A10, IMU and PX4
 
@@ -231,7 +262,7 @@ MaixCAM2 DT identity does not identify the custom carrier's IMU or its address.
 No board IMU device was opened. Standard MaixCAM2 IMU documentation must not be
 used as the wiring specification for this carrier.
 
-## First laptop return and next executable test
+## First laptop return: deployment without estimator launch
 
 Session `m3c-20261101T164018Z` is preserved under
 `R/incoming/received-sessions/`; return archive SHA256 is
@@ -250,7 +281,7 @@ identify the custom carrier's physical SoC marking or IMU wiring.
 
 Loader/help PASS validates only that startup path. The old runbook stopped at
 `/usr/bin/time` with exit 127 before any estimator run; all new-board trajectory,
-CPU, Peak RSS, phase timing and backlog outcomes remain NOT_RUN. The Mac laptop
+CPU, Peak RSS, phase timing and backlog outcomes in that session remain NOT_RUN. The Mac laptop
 ran the original four test files unchanged: 42 PASS / 6 FAIL due to the Linux
 resource sampler's platform requirements; these failures are not reclassified.
 The next runbook lists portable analysis and Linux native tests separately.
@@ -268,12 +299,92 @@ The revised runbook permits estimator diagnostics even without a resource tool,
 retaining CPU/Peak RSS as BLOCKED/NOT_RUN, and documents the native sampler with
 the private tool. A new session must preserve the first session and raw results.
 
+## Second laptop return: actual execution, monocular FAIL
+
+Session `m3c-20261102T080438Z` ran branch commit
+`6ecd2d2e539486eff408e0dd6e4d0d98f9c0a67e`. Its 4,744,327-byte archive has SHA256
+`8136a69f94235b9afec2230bf5cc52999e3159eb572cd47d25abc794df77987e`.
+Host review verified all 144 tar members are safe regular files/directories and
+all 130 extracted regular files match the archive, including a post-analysis
+immutability check. Original records remain under
+`R/incoming/received-sessions/m3c-20261102T080438Z/`; derived host results are
+separate at `R/incoming/reviewed-sessions/m3c-20261102T080438Z/`.
+
+The observed target identity agrees with the first session. The same kit was
+reused and all 6,226 files were reverified. Checked ARM64 binary SHA256 is
+`697c26e36fe2f0325f315b9c8da6bb1848e8ebcb0883a158cbb8d62a6d1bbe37`.
+The private GNU time version and `/bin/true` probes now pass on the actual M3C.
+No estimator rebuild, calibration/parameter change or system tool installation
+was performed. Board wall time is incorrect (July 2026); measurements use one
+native monotonic clock, not a presumed laptop/board wall-clock mapping.
+
+| Run | Selected cameras / IMU delivered | Poses / losses | Estimator | GNU elapsed s | GNU CPU s | GNU Peak RSS KiB |
+|---|---:|---:|---|---:|---:|---:|
+| mono-offline-full, unpaced | 2912 / 29120 | 1 / 1 | FAIL | 29.52 | 26.63 | 114320 |
+| mono-half-full, 0.5× | 2912 / 29120 | 1 / 1 | FAIL | 292.63 | 27.00 | 113712 |
+| mono-half-sampled, 0.5× | 2912 / 29120 | 1 / 1 | FAIL | 293.29 | 28.10 | 114164 |
+| mono-one-full, 1× | 2912 / 29120 | 1 / 1 | FAIL | 147.24 | 27.09 | 114144 |
+| mono-smoke, bounded prefix | 200 / 1992 | 1 / 1 | FAIL, partial | 5.03 | 4.80 | 114884 |
+
+All five child processes exit zero. The four full inputs pass the existing
+frame/pose/schema/source-association checks, but each fails `TRACKING_LOSS`,
+`TRAJECTORY_NOT_EVALUABLE` and `MONO_METRIC_INITIALIZATION_UNVERIFIED`.
+The host used the original V1_01 ZIP with SHA256
+`a920fe5b5e69a6ad19b32f1cfaf90ac2f59d45dfd1ca18cc9722e07684ba45fa`
+for post-execution fixed-scale scoring. **ATE/RPE are unevaluable, not zero and
+not PASS**. Ground truth was never an estimator input or part of the board kit.
+The smoke additionally fails complete-sequence/delivery gates by its deliberate
+prefix limit; it is not a fifth full-sequence repeat. Delivery counts alone do
+not qualify internal IMU integration. The initial uncovered image remains an
+explicit rejection, as on PC.
+
+| Complete run | Frontend P50 / P95 ms | Schur Forward P50 / P95 ms | Replay backlog P95 / maximum frames |
+|---|---:|---:|---:|
+| unpaced | 17.684 / 19.077 | 0.945 / 1.020 | 0 / 0 |
+| 0.5× | 17.712 / 23.175 | 0.931 / 0.995 | 0 / 0 |
+| 0.5× with sampler | 19.135 / 23.100 | 1.091 / 1.987 | 0 / 9 |
+| 1× | 18.008 / 20.355 | 0.978 / 1.036 | 0 / 1 |
+
+Each run has only **116 frontend spans, six Schur Forward spans and zero
+Backward spans**. These cover bootstrap and failure/relocalization. The full
+1× average CPU is 0.184 cores (18.4% of one core), and GNU Peak RSS about 111 MiB,
+but most of that replay occurs after tracking stops. These are failed-pipeline
+resource observations, not proof of valid-VIO capacity, output frequency or a
+tradeoff between precision and speed. Backlog counts overdue replay timestamps,
+not camera hardware queue depth. Native phase timers and whole-process GNU
+resources have different boundaries; absence of a Backward timing is NOT_RUN,
+not a zero-cost backend.
+
+The Linux sampler passes its measurement/identity/artifact/cleanup checks:
+1,557 samples, sampled simultaneous process-tree RSS maximum 115224 KiB,
+observed temperature maximum 57.35 °C and CPU frequency 1200 MHz. Sampled RSS
+includes the wrapper and can miss peaks; it is not interchangeable with GNU
+high-water RSS. This short failed pipeline establishes no 60-minute thermal or
+tracking stability. The Mac portable suite passes 33 tests; the Linux native
+sampler suite is explicitly NOT_RUN on macOS. The first session's 42/6 result
+remains unchanged.
+
+`receipt-integrity.json` binds the original package, `*-evaluation.json` contains
+the trusted host scoring, `*-observations.json` rechecks native timing and the
+sampled run's sealed evidence hashes, and `lifecycle-comparison.json` binds the
+PC/board failure comparison and source call path. `review.json` collects the
+per-run decisions. The generic evaluator's `board_qualification=NOT_RUN` field
+is deliberately unchanged: execution-host identity is separate evidence in the
+returned audit/argv/exit records, not something trajectory scoring certifies.
+
+No physical OS04A10, carrier ICM-42688-P, UART or flight-controller MAVLink was
+used. Real Camera+IMU VIO and operational validity remain NOT_RUN. No new runtime
+package is promoted from this review. First repair and validate the PC metric
+initialization/visual-update chain; then cross-build, verify artifact identity
+and conduct a new, separately retained laptop session.
+
 ## Next decision and RK3576 reuse
 
 Further platform performance optimization is premature until monocular metric
 initialization and continuous tracking pass. The independent headless build,
 ASL boundary, source manifests, fixed-scale evaluation, native phase/resource
 benchmark, offline interfaces and deployable reference artifacts can be reused
-for RK3576. They do not require the M3C camera SDK. Actual board ABI validation,
-sensor timing/calibration and performance remain the next hardware-dependent
-steps on the connected laptop. No RK3576 branch edit is required.
+for RK3576. They do not require the M3C camera SDK. Actual M3C ABI execution now
+has evidence; monocular initialization is the immediate software gate. Sensor
+timing/calibration and performance during qualified tracking still require the
+connected laptop and valid input chain. No RK3576 branch edit is required.
