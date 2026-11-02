@@ -192,6 +192,73 @@ and observation-model issue, not a missing M3C dependency. There is **no new
 qualified mono baseline or replacement ARM64 package** from these experiments.
 The laptop should retain its existing raw results and await a validated package.
 
+### Continued repair: validated defects, monocular gate still FAIL
+
+A continuation from `408c2f3` retains three additional reproduced defects in the
+same opt-in patch. Rejected current image associations now leave both the point's
+local observation index and the cloned state's feature list; previously the next
+Solve reused the rejected bearing. The public-API regression observes the next
+actual update and preserves all 39 uninjected points and their 156 observations.
+`Frame::resetKeyPoints()` replaces all five entries instead of resizing an
+already-five-element vector, so changed map geometry and removed feature indices
+cannot leave stale overlap coordinates. The explicit-ID `FrameBundle` constructor
+now initializes its own ID as well as its child frames, preserving historical
+observation ownership during relocalization. Existing observation-count,
+Reset/destructor and joint-update-order fixes remain intact. No threshold,
+alignment equation, calibration, covariance or success flag is changed in the
+retained patch. Source preparation still does not apply this research patch.
+
+A separate raw-bearing camera/landmark refinement candidate recovered a synthetic
+known scale (2.29996 against 2.3) with unchanged alignment gates, but its first
+complete V1_01/V1_03 monocular replays still failed (one/zero poses). A subsequent
+candidate made one camera/point update agree with an independent dense MAP solve
+using the existing priors and historical keyframes. It improved a V1_01 fragment,
+but repeated filtering produced a catastrophic V1_03 stereo ATE of 640.37 m.
+The generic numerical evaluator returned PASS for that continuous output; this
+was **not accepted as a valid regression**. One-update equivalence does not
+establish the repeated state/landmark correlation model. Both candidates and
+their exclusive fixtures were removed from the repository implementation;
+source/binary snapshots, raw failures, post-replay scores and diagnostics remain
+external. No covariance was invented or gate relaxed to retain either candidate.
+
+Restoring older source mtimes also exposed a local incremental-build pitfall:
+the `final-*` and `retained-*` trial labels do not establish source/binary parity
+and are excluded from final validation. Their raw records remain unchanged.
+Final verification used a **new empty `build-clean` directory**, compiled every
+translation unit, checked the final source delta against the handoff, and applied
+the complete research patch to a fresh prepared source with byte parity.
+The final compiled source differs from the handoff source in only the three
+owning files described above. Clean CTest passes **7/7**; full sourced-ROS2 Python
+regression passes **587/587**, no skips, including the actual C++ boundary tests.
+Earlier unsourced Python skips and an unrelated ROS pytest-plugin import failure
+are retained as environment diagnostics, not counted as passes.
+
+| Clean final PC replay | Cameras / IMU | Poses / losses | Fixed-scale result |
+|---|---:|---:|---|
+| V1_01 mono | 2912 / 29120 | 1 / 1 | FAIL; ATE/RPE unevaluable |
+| V1_03 mono | 2149 / 21500 | 0 / 0 | FAIL; never reaches Tracking; ATE/RPE unevaluable |
+| V1_01 stereo | 2912 / 29120 | 2911 / 0 | Numerical control PASS; ATE 0.041284 m, RPE 1 s 0.043090 m |
+| V1_03 stereo | 2149 / 21500 | 2149 / 0 | Numerical control PASS; ATE 0.062850 m, RPE 1 s 0.034020 m |
+
+All four consume the complete sensor-only input and exit zero. V1_01 mono has
+one metric commit and seven observed visual corrections, but still has no
+continuous/evaluable trajectory; neither an event nor a process exit certifies
+metric initialization. V1_03 has no metric commit. Ground truth is read only
+by post-replay fixed-scale SE(3) scoring. Stereo results are single regression
+controls, not five-repeat acceptance or evidence of accuracy improvement.
+Five monocular repeats and a replacement ARM64 build/package are **NOT_RUN**
+because the initial full monocular gate failed. The distributed M3C binary and
+laptop replay/return instructions remain unchanged; no hardware was connected.
+
+`R/mono-repair/metric-bootstrap/continuation-result.json` indexes all 16 complete
+trial records, including failed/retired candidates and six trials with unverified
+incremental source/binary association. Final acceptance uses only the four
+`clean-*` records, `clean-build-*`, `clean-python-*` and
+`retained-patch-verification.json`. The original `mono-repair/repair-result.json`
+and previous board sessions remain immutable. The protected worktree was only
+read for a 63-file hash audit; seven changes since the prior handoff were observed
+and left untouched. No build or write targeted either protected path.
+
 ## Measured PC performance
 
 The final checked C++ runtime completed full V1_01 stereo 1× with 2911 poses,

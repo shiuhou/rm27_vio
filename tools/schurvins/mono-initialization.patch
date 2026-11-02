@@ -765,6 +765,43 @@
  }
 
  int SchurVINS::RemovePointOutliers() {
+@@ -899,7 +970,13 @@
+                 total_error += r.norm();
+
+                 if (r.norm() > MAX_REPROJECT_ERROR) {
+-                    // curr_pt->RemoveLocalObs(state->id, frame->getNFrameIndex());
++                    // A rejected image association must leave both indexes.
++                    // Otherwise a later Solve3 reuses its cached bearing, and
++                    // KeyframeSelect still counts it as a successful track.
++                    curr_pt->RemoveLocalObs(state->id, frame->getNFrameIndex());
++                    state->features.remove_if([&](const svo::LocalFeaturePtr& feature) {
++                        return feature->frame == frame && feature->point.lock() == curr_pt;
++                    });
+                     frame->type_vec_[i] = svo::FeatureType::kOutlier;
+                     frame->seed_ref_vec_[i].keyframe.reset();
+                     frame->landmark_vec_[i] = nullptr;  // delete landmark observation
+--- a/svo_common/include/svo/common/frame.h
++++ b/svo_common/include/svo/common/frame.h
+@@ -222,7 +222,7 @@
+   void setKeyPoints();
+   inline void resetKeyPoints()
+   {
+-    key_pts_.resize(5, std::make_pair(-1, BearingVector()));
++    key_pts_.assign(5, std::make_pair(-1, BearingVector::Zero()));
+   }
+
+   /// Check if we can select five better key-points.
+--- a/svo_common/src/frame.cpp
++++ b/svo_common/src/frame.cpp
+@@ -302,7 +302,7 @@
+ }
+
+ FrameBundle::FrameBundle(const std::vector<FramePtr>& frames, const int bundle_id)
+-  : frames_(frames)
++  : frames_(frames), bundle_id_(bundle_id)
+ {
+   for(const FramePtr& frame : frames)
+   {
 --- a/svo_ros/src/svo_factory.cpp
 +++ b/svo_ros/src/svo_factory.cpp
 @@ -455,6 +455,25 @@
