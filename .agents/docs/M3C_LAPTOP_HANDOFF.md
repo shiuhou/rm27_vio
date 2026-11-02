@@ -14,10 +14,19 @@
 - **單目已知 FAIL**：PC 和 ARM64 QEMU 完整 V1_01 均只有一個 pose，然後失鎖，
   metric initialization 未驗證。這次板測可以重現失敗和量測資源，不能預設會修好。
   雙目資料僅作軟體控制組，不能算 OS04A10 單目通過。
-- ARM64 包是 Bionic 參考 ABI；尚未在實際 M3C 跑過。先辨識設備，再驗證啟動。
+- ARM64 包是 Bionic 參考 ABI；實際 M3C 目前僅確認 `--help`，尚無 estimator 回放。
+  每輪仍先辨識設備、校驗包及驗證啟動。
   不替換系統 libc／loader、不全域安裝函式庫、不改韌體、EKF、串口或相機設定。
 - 新 Camera 採集仍需使用者明確授權。物理 UART 測試還需確認拆槳、Disarmed、
   串口獨占及現有配置，維持 115200／8N1；本文件沒有提供物理 UART 執行步驟。
+- 使用者已確認這是**自研 M3C 載板，板載 IMU 為 ICM-42688-P**。
+  DT 顯示 MaixCAM2 不能證明載板沿用標準板的 IMU、I²C bus 或地址。
+  接線、SPI／I²C、DRDY、時鐘及驅動仍待原理圖／實機證據；本輪不開啟它。
+
+上一輪 `m3c-20261101T164018Z` 的原始包已回傳主機並通過校驗：板端 inventory、
+6,226 檔案校驗及 `--help` PASS，estimator 尚未啟動，因缺 GNU time 而 BLOCKED。
+舊結果不改寫。下列流程已將執行與資源測量拆開，另有第 5.1 節的小工具包。
+更新程式後建立新 session；不要在舊 session 重跑 `mkdir runs` 或覆蓋輸出。
 
 可直接給 laptop Codex 的任務：
 
@@ -29,7 +38,8 @@
 
 ## 1. laptop：拉取分支與建立獨立 session
 
-以下命令使用 Linux Bash。Windows laptop 可用能連到 M3C 的 WSL Bash，
+以下命令使用 Bash，可在 Linux 或 macOS 執行 laptop 部分；Linux 資源 sampler
+只在 Linux 主機或 M3C 跑。Windows laptop 可用能連到 M3C 的 WSL Bash，
 但先確認 WSL 自己能 SSH 到設備；Windows 能連線不等於 WSL 能連線。
 所有 `REPLACE_...` 都是要實際填寫的值，不能當成已有的路由或帳號。
 
@@ -44,7 +54,7 @@ git clone --single-branch --branch research/m3c-vio \
 若 laptop 已經有這個 checkout，先檢查，不覆蓋 dirty work：
 
 ```bash
-export REPO="$HOME/Projects/rm27_vio-m3c"
+export REPO="${REPO:-$HOME/Projects/rm27_vio-m3c}"
 git -C "$REPO" status --short --branch
 test "$(git -C "$REPO" branch --show-current)" = research/m3c-vio
 test -z "$(git -C "$REPO" status --porcelain)"
@@ -52,10 +62,12 @@ git -C "$REPO" pull --ff-only origin research/m3c-vio
 ```
 
 後續所有 laptop 命令在同一 Bash session 執行：
+若沿用 Mac 上的 `/Users/shiuhou/Documents/rm27/rm27_vio`，先把 `REPO` 設為該路徑，
+以上既有 checkout 檢查也使用這個值；不要再 clone 到同一路徑。
 
 ```bash
 set -euo pipefail
-export REPO="$HOME/Projects/rm27_vio-m3c"
+export REPO="${REPO:-$HOME/Projects/rm27_vio-m3c}"
 export TRANSFER_BASE="$HOME/rm27-m3c-test"
 export SESSION_ID="m3c-$(date -u +%Y%m%dT%H%M%SZ)"
 export SESSION="$TRANSFER_BASE/sessions/$SESSION_ID"
@@ -66,7 +78,21 @@ cd "$REPO"
 git rev-parse HEAD > "$SESSION/code-commit.txt"
 git status --porcelain > "$SESSION/initial-git-status.txt"
 uname -a > "$SESSION/laptop-uname.txt"
-cat /etc/os-release > "$SESSION/laptop-os-release.txt"
+if test -r /etc/os-release; then
+  cat /etc/os-release > "$SESSION/laptop-os-release.txt"
+else
+  sw_vers > "$SESSION/laptop-os-release.txt"
+fi
+```
+
+選擇本機可用的 SHA256 工具：
+
+```bash
+if command -v sha256sum >/dev/null 2>&1; then
+  SHA256=(sha256sum)
+else
+  SHA256=(shasum -a 256)
+fi
 ```
 
 不要在未完成的 session 中 pull 更新或改測試參數。若確實需要改程式，保留此輪，
@@ -118,10 +144,10 @@ test "$BUILD_HOST" != REPLACE_WITH_USER_AT_DEVELOPMENT_HOST
 scp "$BUILD_HOST:/home/shiuhou/Projects/rm27-m3c-schurvins-research/handoff/rm27-m3c-transfer-v1.tar.gz" "$TRANSFER_BASE/"
 scp "$BUILD_HOST:/home/shiuhou/Projects/rm27-m3c-schurvins-research/handoff/rm27-m3c-transfer-v1.tar.gz.sha256" "$TRANSFER_BASE/"
 cd "$TRANSFER_BASE"
-sha256sum -c rm27-m3c-transfer-v1.tar.gz.sha256 | tee "$SESSION/transfer-archive-check.txt"
+"${SHA256[@]}" -c rm27-m3c-transfer-v1.tar.gz.sha256 | tee "$SESSION/transfer-archive-check.txt"
 printf '%s  %s\n' \
   787c6d7be7016f84be52f833f668b8902c22a101ab8a70d8c071ff1274ce489b \
-  rm27-m3c-transfer-v1.tar.gz | sha256sum -c -
+  rm27-m3c-transfer-v1.tar.gz | "${SHA256[@]}" -c -
 test ! -e "$TRANSFER_BASE/rm27-m3c-transfer-v1"
 tar -xzf rm27-m3c-transfer-v1.tar.gz -C "$TRANSFER_BASE"
 export KIT="$TRANSFER_BASE/rm27-m3c-transfer-v1"
@@ -149,13 +175,22 @@ PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q \
   tests/test_schurvins_m3c.py \
   tests/test_schurvins_headless_contract.py \
   tests/test_schurvins_headless_evaluate.py \
-  tests/test_schurvins_benchmark.py \
   --junitxml="$SESSION/laptop-software-junit.xml" \
   > "$SESSION/laptop-software.log" 2>&1
+if test "$(uname -s)" = Linux; then
+  PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python -m pytest -q tests/test_schurvins_benchmark.py \
+    --junitxml="$SESSION/laptop-native-benchmark-junit.xml" \
+    > "$SESSION/laptop-native-benchmark.log" 2>&1
+else
+  printf '%s\n' 'NOT_RUN: Linux /proc and GNU time required; run unchanged suite on Linux host/M3C' \
+    > "$SESSION/laptop-native-benchmark-status.txt"
+fi
 ```
 
 這是 laptop 工具測試，不是 ARM64 執行、完整 583 項環境回歸或 VIO 驗收。
 安裝／測試失敗要保留 log；不為通過而刪除測試。
+上一輪在 Mac 執行原本四檔的 **42 PASS／6 FAIL** 仍是原始結果。這次分開列出
+跨平台工具與 Linux native 測試的適用範圍，不跳過測試後把完整測試組算 PASS。
 
 ## 4. laptop → M3C：先做唯讀設備審計
 
@@ -211,11 +246,59 @@ test "$loader_rc" -eq 0
 不要用系統升級／換 libc／拷入 x86 庫處理。`--help` 成功只是啟動 PASS，不是 estimator PASS。
 如果 M3C 沒有 Python3，包內標準庫校驗也無法跑，先交回主機，不默默跳過校驗。
 
+若要復用上一輪已校驗的板端 kit，先建立新 `$BOARD_SESSION`，第 5 節的 `scp -r`
+可改為下列命令，其餘校驗／help 照跑。這只建立指向舊 kit 的連結，不修改舊資料：
+
+```bash
+ssh "$M3C_SSH" "ln -s '/root/rm27-vio-test/m3c-20261101T164018Z/kit' '$BOARD_SESSION/kit'"
+```
+
+僅在確認該舊路徑仍存在且新路徑尚不存在時使用。不要在已完成 `scp` 的 kit 上再 `ln -s`。
+
+## 5.1 選做：私用 ARM64 GNU time 工具包
+
+上一輪板上沒有 `/usr/bin/time`。主機另備 **17,115 bytes** 的
+`rm27-m3c-time-v1.tar.gz`，不需重傳 1.24 GB 資料包。內容是未修改的 Ubuntu
+ARM64 `time 1.7-25.1build1`、wrapper、校驗及授權資料，使用既有已校驗 runtime
+內的 loader／libraries。它不是 estimator binary，不安裝到 `/usr/bin` 或修改系統。
+已做 QEMU 工具檢查；真正 M3C CPU／RAM 仍須板上實際量測。
+
+archive SHA256：
+
+```text
+3054bea40d0227f7d2afebd1e52ce527be762687617c5440fa9d98a19a987a23
+```
+
+```bash
+scp "$BUILD_HOST:/home/shiuhou/Projects/rm27-m3c-schurvins-research/handoff/rm27-m3c-time-v1.tar.gz" "$TRANSFER_BASE/"
+scp "$BUILD_HOST:/home/shiuhou/Projects/rm27-m3c-schurvins-research/handoff/rm27-m3c-time-v1.tar.gz.sha256" "$TRANSFER_BASE/"
+cd "$TRANSFER_BASE"
+"${SHA256[@]}" -c rm27-m3c-time-v1.tar.gz.sha256
+printf '%s  %s\n' \
+  3054bea40d0227f7d2afebd1e52ce527be762687617c5440fa9d98a19a987a23 \
+  rm27-m3c-time-v1.tar.gz | "${SHA256[@]}" -c -
+test ! -e "$TRANSFER_BASE/rm27-m3c-time-v1"
+tar -xzf rm27-m3c-time-v1.tar.gz -C "$TRANSFER_BASE"
+export TIME_KIT="$TRANSFER_BASE/rm27-m3c-time-v1"
+python3 "$TIME_KIT/verify.py" --kit "$TIME_KIT" > "$SESSION/time-kit-check.json"
+scp -r "$TIME_KIT" "$M3C_SSH:$BOARD_SESSION/time-tool"
+ssh "$M3C_SSH" "python3 '$BOARD_SESSION/time-tool/verify.py' --kit '$BOARD_SESSION/time-tool'" \
+  > "$SESSION/board-time-kit-check.json"
+ssh "$M3C_SSH" "env RM27_RUNTIME_BUNDLE='$BOARD_SESSION/kit/runtime' '$BOARD_SESSION/time-tool/run' --version" \
+  > "$SESSION/board-time-version.txt" 2>&1
+ssh "$M3C_SSH" "env RM27_RUNTIME_BUNDLE='$BOARD_SESSION/kit/runtime' '$BOARD_SESSION/time-tool/run' -v -o '$BOARD_SESSION/time-probe-resource.txt' -- /bin/true" \
+  > "$SESSION/board-time-probe-console.log" 2>&1
+```
+
+已解壓的 laptop 工具只需重新校驗，不能覆蓋。板上版本／probe 失敗時保留 log，
+資源測量 BLOCKED；仍可獨立做下一節不帶 GNU time 的 estimator 回放，不能宣稱效能 PASS。
+
 ## 6. M3C：單目 smoke、完整離線、0.5×／1× 診斷
 
 這段由 laptop 發送，但所有 estimator／GNU time／timeout 都在 **M3C 本機**執行。
-需要板上 Bash、支援 `-k` 的 `timeout` 與 GNU `/usr/bin/time -v`。
-先把版本／help 留存；若缺工具，本階段記 BLOCKED，無須全域安裝套件或改系統。
+執行需要板上 Bash 與支援 `-k` 的 `timeout`；缺少它們才阻止此段回放。
+GNU time 僅是 CPU／Peak RSS 量測的依賴：優先使用已校驗的私用工具，否則用系統工具；
+兩者都不可用時仍執行 estimator，但資源欄位明確記 BLOCKED／NOT_RUN。
 
 ```bash
 ssh -T "$M3C_SSH" bash -s -- "$SESSION_ID" <<'BOARD'
@@ -223,6 +306,7 @@ set -eu
 case "$1" in ''|*[!A-Za-z0-9_-]*) exit 2;; esac
 S="/root/rm27-vio-test/$1"
 K="$S/kit"
+export RM27_RUNTIME_BUNDLE="$K/runtime"
 mkdir "$S/runs"
 uname -a > "$S/board-uname.txt"
 cat /etc/os-release > "$S/board-os-release.txt"
@@ -230,7 +314,15 @@ cat /proc/meminfo > "$S/meminfo-before.txt"
 df -h "$S" > "$S/disk-before.txt"
 command -v timeout > "$S/timeout-path.txt"
 timeout --help > "$S/timeout-help.txt" 2>&1
-/usr/bin/time --version > "$S/time-version.txt" 2>&1
+TIME_TOOL="$S/time-tool/run"
+if test ! -x "$TIME_TOOL"; then TIME_TOOL=/usr/bin/time; fi
+if test -x "$TIME_TOOL" && "$TIME_TOOL" --version > "$S/time-version.txt" 2>&1 \
+   && grep -q GNU "$S/time-version.txt"; then
+  printf '%s\n' "$TIME_TOOL" > "$S/resource-tool.txt"
+else
+  TIME_TOOL=''
+  printf '%s\n' 'BLOCKED: GNU_TIME_UNAVAILABLE; CPU and Peak RSS NOT_RUN' > "$S/resource-tool.txt"
+fi
 
 snapshot() {
   date -u +%Y-%m-%dT%H:%M:%SZ
@@ -251,8 +343,14 @@ run_case() {
   if test "$limit" -gt 0; then set -- "$@" --max-frames "$limit"; fi
   printf '%s\n' "$@" > "$D/argv.txt"
   set +e
-  LC_ALL=C timeout -k 10s "${seconds}s" /usr/bin/time -v \
-    -o "$D/native-resource.txt" "$@" > "$D/process.log" 2>&1
+  if test -n "$TIME_TOOL"; then
+    LC_ALL=C timeout -k 10s "${seconds}s" "$TIME_TOOL" -v \
+      -o "$D/native-resource.txt" "$@" > "$D/process.log" 2>&1
+  else
+    printf '%s\n' '{"status":"BLOCKED","reason":"GNU_TIME_UNAVAILABLE","cpu":"NOT_RUN","peak_rss":"NOT_RUN"}' \
+      > "$D/resource-status.json"
+    LC_ALL=C timeout -k 10s "${seconds}s" "$@" > "$D/process.log" 2>&1
+  fi
   rc=$?
   set -e
   printf '%s\n' "$rc" > "$D/exit-code.txt"
@@ -287,12 +385,13 @@ native process 退出 0 而單目只一個 pose，仍是已知 **estimator FAIL*
 
 ## 7. 選做：板上 native benchmark sampler
 
-第 6 節的 GNU time 是板端 CPU／Peak RSS 原始證據，frontend／forward／backward
+第 6 節有 GNU time 時才有板端 CPU／Peak RSS 原始證據，frontend／forward／backward
 timing 在 `native-events.jsonl`，schedule backlog 在 `frames.csv`。
 thermal／frequency 只有前後快照，**不是全程熱穩定性測量**。
 
-若板上已有 Python 3.10+、NumPy 和 GNU time，可另跑現有 sampler 取得 process-tree
-採樣。不要為這步改系統 Python。laptop 把**當次程式**送到同一 session：
+若板上已有 Python 3.10+、NumPy，且第 5.1 節私用 GNU time probe 成功，
+可另跑 sampler 取得 process-tree 採樣。上一輪已觀察 Python 3.13.2／NumPy 2.2.6，
+新一輪仍需檢查。不要為這步改系統 Python。laptop 把**當次程式**送到同一 session：
 
 ```bash
 cd "$REPO"
@@ -303,14 +402,16 @@ set -eu
 case "$1" in ''|*[!A-Za-z0-9_-]*) exit 2;; esac
 S="/root/rm27-vio-test/$1"
 K="$S/kit"
+export RM27_RUNTIME_BUNDLE="$K/runtime"
 python3 -c 'import sys; assert sys.version_info >= (3,10); import numpy'
 mkdir "$S/repo"
 tar -xf "$S/repo-source.tar" -C "$S/repo"
 cd "$S/repo"
 python3 -m tools.schurvins.benchmark run \
   --target m3c-native --rate 0.5 --timeout-s 900 \
+  --time-binary "$S/time-tool/run" \
   --output "$S/runs/mono-half-sampled" \
-  --artifact "$K/runtime" --artifact "$K/input" \
+  --artifact "$K/runtime" --artifact "$K/input" --artifact "$S/time-tool" \
   -- "$K/runtime/run" --dataset "$K/input" --mode mono \
   --calib "$K/runtime/params/calib/euroc_mono.yaml" \
   --params "$K/runtime/params/vio_mono.yaml" \
@@ -320,6 +421,7 @@ BOARD
 
 這個 sampler 要求實際 AArch64 與可辨識的 M3C/MaixCAM2 DT identity。
 若拒絕身份、缺 Python／NumPy，記 sampler BLOCKED，回傳第 6 節的證據。
+私用 GNU time 不可用也記 sampler BLOCKED；不把未量測的基本回放當資源 benchmark。
 不能把 target 改成 `pc-native` 假冒身份，也不能在 laptop 量 SSH client 當板端 CPU。
 sampler `PASS` 只代表測量完成，estimator 判定仍要看原始單目證據。
 
@@ -330,7 +432,7 @@ sampler `PASS` 只代表測量完成，estimator 判定仍要看原始單目證�
 
 ```bash
 mkdir "$SESSION/board-results"
-ssh -T "$M3C_SSH" "cd '$BOARD_SESSION' && tar --exclude=./kit --exclude=./repo --exclude=./repo-source.tar -cf - ." \
+ssh -T "$M3C_SSH" "cd '$BOARD_SESSION' && tar --exclude=./kit --exclude=./time-tool --exclude=./repo --exclude=./repo-source.tar -cf - ." \
   > "$SESSION/board-results.tar"
 tar -tf "$SESSION/board-results.tar" > "$SESSION/board-results-members.txt"
 tar -xf "$SESSION/board-results.tar" -C "$SESSION/board-results"
@@ -356,7 +458,7 @@ results = []
 for run in sorted((s/'board-results/runs').glob('*')):
     item = {'run': run.name, 'scope': 'BOARD_DIAGNOSTIC_REVIEW',
             'estimator_acceptance': 'NOT_RUN', 'operational_validity': 'NOT_RUN'}
-    for name in ('exit-code.txt', 'benchmark.json'):
+    for name in ('exit-code.txt', 'benchmark.json', 'resource-status.json'):
         path = run/name
         if path.exists(): item[name] = path.read_text()
     try:
@@ -424,14 +526,27 @@ token、相機私有錄影或整個 `$HOME` 打包。若改了 estimator／binar
 ```bash
 test -s "$SESSION/RETURN.md"
 cd "$TRANSFER_BASE/sessions"
-tar -czf "$TRANSFER_BASE/$SESSION_ID-results.tar.gz" "$SESSION_ID"
+python3 - "$SESSION" "$TRANSFER_BASE/$SESSION_ID-results.tar.gz" <<'PY'
+from pathlib import Path
+import sys, tarfile
+root = Path(sys.argv[1]).absolute()
+with tarfile.open(sys.argv[2], 'x:gz') as archive:
+    for path in [root, *sorted(root.rglob('*'))]:
+        if path.is_symlink() or not (path.is_file() or path.is_dir()):
+            raise ValueError('non-regular member refused: '+str(path))
+        if path.name.startswith('._') or '__MACOSX' in path.parts:
+            raise ValueError('review macOS metadata before packaging: '+str(path))
+        archive.add(path, arcname=str(path.relative_to(root.parent)), recursive=False)
+PY
 cd "$TRANSFER_BASE"
-sha256sum "$SESSION_ID-results.tar.gz" > "$SESSION_ID-results.tar.gz.sha256"
+"${SHA256[@]}" "$SESSION_ID-results.tar.gz" > "$SESSION_ID-results.tar.gz.sha256"
 scp "$SESSION_ID-results.tar.gz" "$SESSION_ID-results.tar.gz.sha256" \
   "$BUILD_HOST:/home/shiuhou/Projects/rm27-m3c-schurvins-research/incoming/"
 ```
 
 `incoming/` 已在開發主機準備好。無法 SSH 回主機就以 USB 搬運同兩檔，
+Python 打包避免 macOS tar 自動產生 AppleDouble／xattr sidecar；若打包非零退出，
+不要傳送不完整檔案。保留失敗包，檢查原因後換新檔名重包，不覆蓋唯一證據。
 不要為交接臨時開防火牆／公開服務。回到這個主機的對話提供：
 
 > laptop 測試已回傳：Session `<實際值>`，archive `<主機 incoming 絕對路徑>`，

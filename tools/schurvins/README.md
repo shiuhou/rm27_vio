@@ -30,6 +30,13 @@ gates. `python3 -m tools.schurvins.m3c --help` describes the read-only inventory
 collector; it is not a camera or UART opener. Current measured evidence is in the
 M3C section of the integration record.
 
+The first laptop return confirms target inventory, file integrity and loader/help,
+with no estimator launch because system GNU time was absent. The runbook includes
+a private ARM64 tool package and `benchmark run --time-binary /absolute/private/run`.
+GNU identity and tool hashes are recorded; resource measurement remains separate
+from estimator execution. Native process tests require Linux, while portable
+analysis checks can run on the Mac laptop.
+
 ## Source and environment preparation
 
 `sources.lock.json` fixes SchurVINS

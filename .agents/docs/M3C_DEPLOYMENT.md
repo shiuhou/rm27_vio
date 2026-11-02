@@ -4,9 +4,11 @@ For the laptop physically connected to M3C, follow the
 [laptop test and return runbook](M3C_LAPTOP_HANDOFF.md). It covers the separate
 checked runtime/data transfer, board identity and ABI checks, mono diagnostics,
 and raw-result handoff to this development host. Git pull alone does not include
-the binary or public dataset. No laptop/board results have been received yet.
+the binary or public dataset. The first laptop return has now been received and
+reviewed; it establishes inventory, transferred-file integrity and loader/help,
+but no estimator launch or board resource measurement.
 
-This is the independent M3C branch result dated 2026-10-31. The
+This records the independent M3C pre-board baseline and the first laptop return. The
 [shared integration record](SCHURVINS_INTEGRATION.md) describes the imported
 SchurVINS research baseline; it is not evidence of execution on M3C.
 OpenVINS and the RK3576 worktree remain separate and unchanged by this task.
@@ -22,8 +24,9 @@ OpenVINS and the RK3576 worktree remain separate and unchanged by this task.
 | Full PC mono V1_01 / V1_03, ROS runner | FAIL | Trajectory not evaluable; process exit zero is insufficient |
 | Full PC mono V1_01, ROS-free runtime | FAIL | 2912 cameras, 29120 IMU samples admitted, one pose and one tracking loss |
 | Full PC stereo V1_01 at 1× | PASS for numerical replay | 2911 poses, one explicit input-prefix rejection, no observed tracking exit |
-| Actual M3C identity / OS / SDK audit | BLOCKED | SSH closed before authentication; user requested continuation without board |
-| M3C offline / 0.5× / 1× replay | BLOCKED | No actual board execution evidence |
+| Actual M3C identity / OS / SDK inventory | PASS inventory / PARTIAL SDK | Laptop confirmed attached device; observed MaixCAM2 DT, axera,ax620e, AArch64 Linux; SDK candidate paths are not SDK qualification |
+| Actual M3C checked package / loader help | PASS | 6,226 file hashes match; checked binary `--help` exits zero, not an estimator replay |
+| M3C offline / 0.5× / 1× replay | BLOCKED in first session | Missing GNU time stopped old runbook before estimator launch; next procedure separates execution and measurement |
 | Real OS04A10 + IMU VIO | NOT_RUN | Device access, timing and qualified input chain unavailable |
 | Physical PX4 UART | NOT_RUN | Safety/configuration confirmations required |
 | 60-minute qualified VIO endurance | NOT_RUN | Requires a valid mono baseline and actual target access |
@@ -59,8 +62,9 @@ runs are preserved. The checked ARM64 package at
 parameters, calibration and notices, about 148 MB total. Its wrapper was tested
 with a relocated path containing spaces; post-replay hashes verify both bundles
 unchanged. The ARM64 compiler/sysroot and opengv artifacts were read from the
-existing reference research without changing them. M3C SoC, RAM, Linux, libc,
-loader, SDK and device owners remain UNKNOWN until a fresh board audit succeeds.
+existing reference research without changing them. The first laptop inventory
+below supplies observed RAM, Linux, libc and device owners; complete estimator
+ABI execution, SDK and custom carrier qualification remain pending.
 
 The [standalone C++ runtime](../../tools/schurvins/headless/README.md) replaces
 the ROS parameter/factory/input/output boundary with YAML and ASL input. It
@@ -221,6 +225,49 @@ was performed. New capture requires user authorization. Physical UART requires
 props removed, Disarmed, exclusive ownership and current configuration checks;
 retain 115200/8N1. See `R/interface/` and the existing data contract.
 
+The user identifies the hardware as a custom M3C carrier with **ICM-42688-P**.
+Its bus, pins, DRDY, clock, driver and camera synchronization are unverified;
+MaixCAM2 DT identity does not identify the custom carrier's IMU or its address.
+No board IMU device was opened. Standard MaixCAM2 IMU documentation must not be
+used as the wiring specification for this carrier.
+
+## First laptop return and next executable test
+
+Session `m3c-20261101T164018Z` is preserved under
+`R/incoming/received-sessions/`; return archive SHA256 is
+`248b991848fd0a74f41316a8db2b9e2315ddda4e74cd7848b3ccc011fd37af4c`.
+Host verification confirmed the checksum and 103 regular-file/directory tar
+members, without unsafe paths or macOS sidecars. Earlier failed SSH attempts and
+the missing-tool failure remain alongside the successful connected audit.
+
+Observed target: DT `MaixCAM2` / `axera,ax620e`, Linux 4.19.125 AArch64,
+Ubuntu 22.04, glibc 2.35, two processors; MemTotal 457724 KiB and initial
+MemAvailable 342716 KiB, no swap. GCC/G++ 11.4 are present; CMake is absent.
+Maix/OpenCV library and SDK candidate paths were listed, but required SDK headers
+and acquisition interfaces have not been qualified. A pre-existing `launcher`
+owned `/dev/ttyS4` and AX devices and was left running. These observations do not
+identify the custom carrier's physical SoC marking or IMU wiring.
+
+Loader/help PASS validates only that startup path. The old runbook stopped at
+`/usr/bin/time` with exit 127 before any estimator run; all new-board trajectory,
+CPU, Peak RSS, phase timing and backlog outcomes remain NOT_RUN. The Mac laptop
+ran the original four test files unchanged: 42 PASS / 6 FAIL due to the Linux
+resource sampler's platform requirements; these failures are not reclassified.
+The next runbook lists portable analysis and Linux native tests separately.
+
+An optional private ARM64 GNU time package is at
+`R/handoff/rm27-m3c-time-v1.tar.gz` (17,115 bytes, SHA256
+`3054bea40d0227f7d2afebd1e52ce527be762687617c5440fa9d98a19a987a23`).
+It reuses the unmodified Bionic reference tool with the existing checked runtime
+loader/libraries; no target system installation or libc replacement is needed.
+QEMU checks confirmed GNU time identity, resource format and child exit 7
+propagation; this is not M3C measurement evidence. The benchmark accepts an
+explicit `--time-binary`, validates GNU identity, records tool hashes/version,
+detects tool changes and rejects mixed resource tools in repeat cohorts.
+The revised runbook permits estimator diagnostics even without a resource tool,
+retaining CPU/Peak RSS as BLOCKED/NOT_RUN, and documents the native sampler with
+the private tool. A new session must preserve the first session and raw results.
+
 ## Next decision and RK3576 reuse
 
 Further platform performance optimization is premature until monocular metric
@@ -229,4 +276,4 @@ ASL boundary, source manifests, fixed-scale evaluation, native phase/resource
 benchmark, offline interfaces and deployable reference artifacts can be reused
 for RK3576. They do not require the M3C camera SDK. Actual board ABI validation,
 sensor timing/calibration and performance remain the next hardware-dependent
-steps after the user reconnects the board. No RK3576 branch edit is required.
+steps on the connected laptop. No RK3576 branch edit is required.
