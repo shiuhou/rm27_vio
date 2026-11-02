@@ -16,6 +16,137 @@ This records the independent baseline and both actual M3C laptop returns. The
 SchurVINS research baseline; it is not evidence of execution on M3C.
 OpenVINS and the RK3576 worktree remain separate and unchanged by this task.
 
+## Authorized joint bootstrap/filter repair (active candidate, not qualified)
+
+The user now authorizes committing and pushing the unfinished source as a **WIP
+checkpoint**, before a possible change of direction. Publication includes the
+current joint engine, runtime, patch, native fixtures and this evidence record;
+it does not qualify the candidate or authorize hardware operation. The latest
+engine batch still has no subsequent fresh complete build/suite/full replay.
+No replacement ARM64/laptop package is issued. Raw sources, recordings, builds
+and local diagnostic artifacts remain outside Git.
+
+The 704c40a first-failure evidence and all prior failed candidates remain
+unchanged. The current user authorizes implementing the missing statistical
+handoff inside SchurVINS/SVO; this is a software task, not a board dependency.
+The candidate is built in the new `R/joint-handoff/candidate` tree and must pass
+production-path tests and full sensor-only mono/stereo replays before promotion.
+
+The implemented contract is a persistent joint raw-factor window. Each camera
+state contains body-to-world quaternion, world position and velocity, and body
+accelerometer/gyro biases (15 local coordinates). Quaternion perturbations are
+right/body, `q <- q Exp(dtheta)`; other increments are additive in their stated
+frames. Landmarks are world XYZ. Gravity is an estimated persistent world 3-vector,
+including its cross-information; the first pose rotation/translation define the
+six-dimensional gauge exactly. There is no free similarity/scale gauge once SI
+IMU factors are informative, and no post-hoc fitted scale or gravity rotation
+that discards gravity uncertainty.
+
+Raw camera bearings use actual extrinsics, focal lengths, configured pixel noise
+and existing robust loss. Raw IMU spans are clipped to exact camera boundaries,
+with the active configured continuous measurement noise and bias random walks, complete
+15-dimensional preintegration covariance and bias derivatives. Only the configured
+initial velocity/bias distributions are priors. SVO geometry and the original
+alignment are seeds/diagnostics, never independent information priors; neither a
+fixed diagonal point covariance nor the old conditional pose Hessian is exported
+as a joint posterior. Existing physical, residual and observability gates apply
+to the actual estimated solution before metric/tracking success is published.
+
+Camera elimination and point recovery use the same linearized joint objective.
+Active raw factors remain in that objective and are relinearized rather than
+re-consumed as independent data; posterior means only seed the next solve.
+When dropping an old pose, eliminate its velocity/bias and all landmark track
+segments it observed, including every observation of those segments at retained
+poses. Absorb those incident factors and the complete applicable previous prior
+into one rank-revealing state/gravity marginal prior. Nonincident factors remain
+raw. Future observations of a retired physical landmark start a free segment:
+the previous point mean is a numerical seed only. This deliberately discards
+cross-segment identity constraints, a conservative loss of information, and avoids
+an unbounded dense point-point prior. Original measurement identities are global
+(epoch, frame timestamp, camera, feature index), independent of segment IDs;
+absorbed observations cannot be re-added under a new segment. Prior linearization
+is frozen and its coordinate convention is retained explicitly.
+
+This candidate does not establish that the missing contract is the unique root
+cause. No new accuracy threshold is invented: complete execution, continuous
+scorable tracking, precision and operational validity are reported separately.
+Applicable predeclared absolute Schur ATE/RPE precision acceptance remains BLOCKED.
+Hardware operation and replacement ARM64 packaging remain outside this
+checkpoint; WIP source publication is separately authorized as stated above.
+
+### Implemented PC candidate and current evidence
+
+**Stopped at the user's next-step boundary.** The latest source has targeted
+locked-GCC tests PASS for restored inherited three-view/1km admission, explicit
+pending-factor retirement, and LM scaling within the same undamped point
+subspace. Exact C4 evidence identifies two-view point436 growing to4.46km;
+its near-null depth eigenmode is spuriously activated by old damping scaling,
+producing a14km trial step. This is a new-path admission/numerical-model defect,
+not evidence reopening the excluded old Schur solver hypothesis. Iteration
+budgets, physical gates and numerical convergence tolerances were not relaxed.
+The new captured-graph counterfactual converges in5iterations, but ALL241current
+visual rows are pending; it is inertial+old-prior numerical evidence and **not a
+visual correction or VIO PASS**. The old prior itself came from the older model.
+
+This final engine batch is **unintegrated/unqualified**: the runtime still needs
+pending/warmup handling, admitted mature valid counts and the inherited3px mean
+point rejection. No fresh C5 build, full suite or full replay followed this batch.
+`R/joint-handoff/stopped-state.json` and the scoped `stopped-source.patch` bind
+that exact source; the unique activity plan records the next implementation step.
+The C3 partial V103 replay was explicitly terminated on user request; all its
+raw output is retained and marked incomplete, not scored as a complete failure.
+Previously completed results retain their original status.
+
+Snapshotv1 had proven16-digit loss in the locked old yaml-cpp Node conversion;
+its reloaded model is approximate and must not be called an exact reproducer.
+Snapshotv2 encodes and bit-checks every source double before writing; locked-GCC
+roundtrip tests retain the original H/b/cost assertions and PASS. Exact C4
+source/iterate snapshots and point436 dense blocks are preserved.
+
+Noise provenance is also explicit: covariance currently uses inherited upstream
+YAML densities, not the supplied sensor-metadata model. Both datasets' metadata
+specify200Hz and(acc,gyro,accRW,gyroRW)=(.002,.00016968,.003,.000019393), while
+the pinned unchanged mono YAML says800Hz and(.008,.0012,.1,.03). Integration
+uses actual timestamps, not the800Hz field. `sensor-model-provenance.json`
+records a metadata-derived calibration prepared but NOT_RUN; no covariance
+values were fitted. The initial velocity/bias distributions remain configured
+assumptions, not a verified dataset posterior.
+
+`R/joint-handoff/result.json` indexes immutable candidate patches, fresh builds,
+raw complete replays and post-run fixed-scale scoring. Candidate2 implements the
+contract above in the actual mono FrameHandler/SchurVINS path; stereo still uses
+its validated existing update. It is **not a qualified replacement runtime**.
+Native C++10/10 and software587/no-skips PASS. The captured original four-frame
+public-API packet admits4frames/3IMUedges/638unique pixels/193points and correctly
+refuses metric readiness because its bootstrap history is absent; the common raw
+objective falls1016645.17→10.468, not evidence of full VIO success.
+
+Two independent lifecycle/coordinate fixes are established. First, retirement
+cleared frontend landmark pointers before removing their reverse observations.
+After the delayed last-removed-keyframe owner was released,148 distinct surviving
+points referenced expired frame0 and frame148 matching collapsed to40. The actual
+frontend regression FAILs on the preserved first candidate and PASSes after
+`removeObservation(frame_id)` precedes pointer clearing. Second, the raw-factor
+landmark outlives a deleted SVO Point; seeding only live weak pointers left latent
+points in visual units. All latent means now receive the same camera-origin
+similarity, with checked transactional setters. A real V101 witness has2expired
+points, V1036; source→scaled camera-coordinate errors are1.31e-14/5.16e-14m,
+while the old skipped-point coordinates remain unscaled. Independent YAML-prior
+native coverage destroys the frontend owners before seeding and checks the
+persisting factor landmark. These fixes do not establish unique VIO causality.
+
+Candidate2 full sensor-only V101/V103 mono process execution PASS, but continuous
+VIO **FAIL**:9/24poses and one tracking loss each, all2912/2149camera and
+29120/21500IMU inputs delivered. Both pass the unchanged physical joint bootstrap
+gates; that is not proof the metric initialization is correct. The next observed
+refusal is numerical tracking solve at bundles155/198, being captured for exact
+same-graph replay. No full mono success, repeated-success claim or deployment
+promotion is made. Candidate1's native abort/failed replay remains unchanged.
+Stereo numerical controls complete2911/2149poses with zero losses, ATE
+0.047677/0.065406m and RPE1s0.042490/0.033189m. These are diagnostic fixed-scale
+scores; absolute precision acceptance remains BLOCKED. Five repeats, paced valid
+VIO resources, stability and a new ARM64 package remain NOT_RUN pending full mono.
+
 ## Qualification
 
 | Boundary | Result | Evidence / limitation |
@@ -258,6 +389,200 @@ incremental source/binary association. Final acceptance uses only the four
 and previous board sessions remain immutable. The protected worktree was only
 read for a 63-file hash audit; seven changes since the prior handoff were observed
 and left untouched. No build or write targeted either protected path.
+
+### First-failure localization from 704c40a: no safe local repair established
+
+This round writes only the M3C worktree. No commit, push, merge, ARM64 build or
+hardware operation is authorized. Prior `clean-*` evidence and retired-candidate
+failures remain unchanged. New source, a fresh empty diagnostic build and all
+new artifacts are under `.agents/runs/m3c-first-failure-704c40a/` (abbreviated `D`).
+`D/result.json` binds the baseline research patch, diagnostic source manifest,
+compiled binary, complete replays and the counterexamples below. Estimator
+math, gates and the tracked research patch are unchanged; the candidate source
+adds bounded read-only diagnostics only.
+
+The trusted clean V1_01 metric commit is bundle 674, followed by its first
+mature correction at 676 (124 surviving observations), then failure at 677
+(one survivor). Seven correction events do not establish correct metric
+initialization. Clean V1_03 has no metric commit: 1,016 alignment attempts
+contain 979 gravity, 35 accelerometer-bias and two translation rejections.
+Its first translation rejection already has about 11.06 m/s² estimated bias;
+the reported reason does not mean translation is its sole problem.
+Both sequences use the same alignment contract and physical gates.
+
+The new diagnostic V1_01 replay still fails, but initializes at bundle 338,
+not 674. It must **not** be presented as the exact earlier clean window.
+The numerical-window difference is retained as a reproducibility limitation;
+this round does not establish its origin or infer it from matching pose counts.
+The following detailed residual/covariance evidence belongs to that separately
+recorded diagnostic sequence:
+
+| Current mature observations | Before correction median / P95 px | After camera step | After point step | Above existing 4 px gate after both |
+|---|---:|---:|---:|---:|
+| First actual update, bundle 340, 136 observations | 0.773 / 2.514 | 3.436 / 7.394 | 2.141 / 4.713 | 15 |
+| Next update, bundle 341, 136 observations | 2.544 / 6.837 | 6.482 / 11.284 | 5.290 / 10.303 | 109 |
+
+The first complete joint step already creates rejected residuals, before any
+previous filter visual update can have been reused. The next update reuses 391
+local and 665 historical indexed observations and leaves 27 valid current
+features. Reuse is observed; it is not by itself proof of an invalid likelihood.
+No local/historical duplicate was found *within* an update. Finite covariance
+and approximately 1e-16 negative clone eigenvalues do not support a catastrophic
+nonfinite/indefinite-covariance failure hypothesis. State/landmark correlations
+remain unqualified.
+
+A public-API reproducer eliminates image processing and private-state injection:
+`D/reproducer/sensor-only-first-four.json` plus its calibration total 202,844
+bytes. `InitializeMetric`, `Forward` and `Backward` reproduce valid counts
+`[156, 0, 121, 27]` for bundles 338–341. All 17 recorded phases match point,
+clone and selected-point identities; maximum scalar difference is 1.06e-8
+(the 1e-6 comparison tolerance is numerical reproduction tolerance, not a VIO
+precision gate). Sources, extraction, locked-container commands, hashes and
+instructions are in `D/reproducer/README.md` and `comparison.json`.
+
+A smaller self-contained counterexample is `D/minimal-point1013.json` (10,189
+bytes), verified by `D/verify_minimal.py` with NumPy. It contains three local
+and two historical rows, raw bearings, poses, operators and the actual update.
+For this point, the current residual increases from 2.194 px before correction
+to 5.562 px after both steps. Camera elimination uses the local free-point
+objective, while the point correction adds historical rows and a finite prior
+absent from that elimination. That objective mismatch is source-confirmed;
+it does not prove that replacing one of the objectives yields a valid repeated
+estimator model.
+
+The bounded local-conditional counterfactual confirms the danger: it reduces
+this point's local residual to 1.507 px but moves it 0.334 m and increases one
+historical residual from 3.010 to 22.265 px. Across the first update, median
+point displacement would be 0.951 m and historical squared residual cost would
+rise from 1,258 to 98,430. This standalone correction is **REJECTED**, not inserted
+into the estimator. It repeats neither the withdrawn BA nor the prior-MAP
+camera-objective change. No covariance, noise or threshold is invented to make
+it pass.
+
+Other bounded falsifications are recorded separately:
+
+- At metric similarity handoff, all 156 matched landmarks preserve unit-plane
+  projection within 6.2e-13; their depths receive the intended uniform scale.
+  This excludes a simple geometric handoff error for this capture, not incorrect
+  *true* metric scale.
+- Native re-solves of seven captured V1_01/V1_03 windows reproduce decisions;
+  visual-scale renaming and rigid world yaw preserve physical estimates and
+  decisions to numerical precision. A simple unit/gauge change cannot cure the
+  observed gravity/bias violations.
+- Summed clipped IMU integration durations equal camera spans exactly. Repeated
+  sample timestamps in edge-containing delivery are interpolation support,
+  not evidence of integrating the overlap twice.
+
+The last two checks run from `D/counterexample.cpp` and are bound by
+`counterexample-execution.json`. Neither proves that the accepted initialization
+is statistically or physically correct. The common unresolved interface remains
+visual bootstrap uncertainty and the joint state/landmark information supplied
+to the filter; a unique common root cause has **not** been established.
+
+All four new full sensor-only diagnostic replays finish with exit zero:
+
+| Replay | Cameras / IMU | Poses / losses | Continuity and scoring | Precision acceptance |
+|---|---:|---:|---|---|
+| V1_01 mono | 2912 / 29120 | 1 / 1 | FAIL; trajectory unevaluable | NOT_RUN |
+| V1_03 mono | 2149 / 21500 | 0 / 0 | FAIL; no trajectory | NOT_RUN |
+| V1_01 stereo | 2912 / 29120 | 2911 / 0 | PASS; ATE 0.049445 m, RPE 1 s 0.042444 m | BLOCKED: applicable Schur precision criterion missing |
+| V1_03 stereo | 2149 / 21500 | 2149 / 0 | PASS; ATE 0.052751 m, RPE 1 s 0.032623 m | BLOCKED: applicable Schur precision criterion missing |
+
+The old generic evaluator outputs, including the 640.37 m `PASS`, remain
+immutable. `headless_evaluate.py` certifies full-sequence numerical replay only;
+it has no magnitude-based ATE/RPE gate. Historical 1 cm in
+`OPENVINS_ADAPTER.md` is repeat-vs-native-run02 consistency, not absolute Schur
+accuracy, and the Schur README explicitly forbids borrowing it as an algorithm
+comparison allowance. The 200 Hz requirement concerns IMU input. No applicable
+predeclared Schur absolute ATE/RPE limit or permitted regression margin was
+located; none is selected retrospectively. Continuous/scorable therefore does
+not mean accuracy accepted.
+
+The fresh diagnostic build passes seven native tests, and the existing full
+sourced-ROS2 regression passes 587 tests without skips. These check instrumentation
+and software behavior, not VIO success. Repeats remain NOT_RUN because full mono
+fails. No estimator repair is retained: the result is a localized first-failure
+counterexample, excluded hypotheses and a rejected unsafe local correction.
+
+### Bounded bootstrap/filter information-contract decision
+
+The proposed bounded check is now complete on the same four-frame packet and
+first correction. A read-only public-API rerun again returns `[156,0,121,27]`;
+all 907 frozen source hashes match. No estimator or tracked research-patch
+change, full-sequence replay, ARM64 build, hardware operation or publication is
+part of this continuation. `D/joint-contract-replay.json` records the actual
+rerun and independent numerical checks; `D/result.json` indexes the decision.
+
+At one frozen linearization, a common joint Gaussian objective requires the
+same point blocks in camera elimination and conditional point recovery:
+
+```text
+Hs = Hxx - Hxp inverse(Hpp) Hpx;  gs = gx - Hxp inverse(Hpp) gp
+Hpp dp = gp - Hpx dx
+```
+
+`D/joint_information_check.py/json` reconstructs the executed first correction
+from 136 points, 408 local observations and 668 historical observations. There
+are no repeated observation keys or local/historical overlaps within this
+update. The production point step and covariance are reconstructed within
+1.33e-11 m and 1.09e-12 respectively. Camera elimination uses local `Vl,gl`;
+point recovery instead uses `Vl+Vh+100I,gl+gh`. The `100I` comes from the existing
+uncalibrated `0.01I` point prior. Using those latter blocks consistently in the
+camera equation changes its Schur Hessian by 62.7% in relative Frobenius norm
+and its reduced gradient by 434.4%. This is a material objective change, not an
+equivalent numerical rearrangement. Adding fixed historical poses and the point
+prior also changes the local visual rank from 11/18 to 18/18. These ranks describe
+the frozen visual terms, not the observability of the complete inertial system.
+Neither adding those terms to camera elimination nor dropping them from point
+recovery is established as a safe estimator fix.
+
+The executed bootstrap interface does not supply the missing joint model.
+`MonoAlignmentResult` exports means and scalar gate diagnostics. At
+`metric_commit`, the actual 15x15 state covariance contains fixed diagonal
+blocks and zero cross blocks. Before correction 340, point covariances are
+uninitialized. `InitializeMetric` receives no joint state/map information;
+`transformMetricMap` transports mean geometry and clears the point Schur caches.
+The estimated shared similarity depends on scale, gravity alignment and the
+first-pose gauge choice; its induced uncertainty and correlations are not
+propagated.
+
+A 6x6 conditional pose Hessian **does** exist through
+`PoseOptimizer::getHessian()`. It treats landmarks as fixed and uses a different
+pose tangent and adaptive robust weights. Its inverse does not supply the joint
+bootstrap posterior. The point `V/W` likelihood blocks and scalar alignment
+residual are also insufficient substitutes. Full raw factors and a justified
+noise/prior model could support a new statistical extraction; current exports
+do not identify it uniquely.
+
+`D/joint_prior_witness.py` and `joint-prior-witness.json` demonstrate that last
+limitation on one captured point. The actual pre-update point covariance is
+null. Even granting the code's explicitly unqualified `0.01I` placeholder,
+three PSD joint priors with identical means and identical state/point marginal
+covariances yield different corrections when their cross covariance differs.
+This is an identifiability witness, not a proposed correlation/noise setting,
+proof that independence is invalid, or proof of the cause of tracking loss.
+Both numerical checks were independently rerun with identical JSON results.
+
+| Bounded contract boundary | Result |
+|---|---|
+| Public-API input reproduction / frozen source identity | PASS |
+| Reconstruct actual point equation / covariance | PASS |
+| Camera and point steps implement the tested common joint objective | FAIL |
+| Derive a unique justified bootstrap joint prior from current exports | BLOCKED: missing producer statistical contract |
+| Safe estimator repair / full monocular VIO | NOT_ESTABLISHED / FAIL unchanged |
+
+Stop local numerical patching under the present interface. Further Schur mono
+work requires an explicit bootstrap/marginalization architecture decision: a
+consistent joint prior or equivalent factorized information, receiver tangent
+and gauge policy, uncertainty of retained historical poses, and measurement
+identities showing which image/IMU factors are already represented. A proved
+conservative treatment of correlations may also satisfy that contract. The
+missing information is not uniquely recoverable by renaming scale, adjusting
+one covariance constant or copying an existing conditional Hessian.
+This finding does not establish a unique shared root cause for both sequences.
+The current mono runtime remains unqualified; no replacement laptop package is
+issued. Prior seven-native/587-software regression results remain preserved;
+they were not rerun because estimator and build sources did not change.
 
 ## Measured PC performance
 

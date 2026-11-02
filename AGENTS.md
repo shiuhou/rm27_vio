@@ -60,3 +60,14 @@ other branches. Shared estimator, input/output contracts
 and benchmarks remain reusable for RK3576; M3C SDK code stays isolated.
 Activity record: `.agents/plans/plan_m3c_schurvins_1.md`. Large evidence belongs in
 `/home/shiuhou/Projects/rm27-m3c-schurvins-research`.
+
+
+## Shared real-camera test videos
+
+Read `data/shared_vision/README.md` and its linked manifest before using the
+shared real-camera MP4 fixtures. This local relative link points to the RM27
+integration workspace's `data/vision/` catalog; raw videos are not bundled in
+Git clones. Keep inputs unchanged and derived results in this repo's ignored
+artifacts. Encoded video alone is not synchronized Camera+IMU VIO or verified
+sensor/exposure timing evidence. If the link/data is absent, obtain or relink
+the shared dataset instead of inventing missing provenance.

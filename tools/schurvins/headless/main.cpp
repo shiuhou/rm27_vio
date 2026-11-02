@@ -216,6 +216,13 @@ int main(int argc, char** argv) {
       const auto& m = imu_samples[imu_index++]; imu->addImuMeasurement(svo::ImuMeasurement(m.ns * 1e-9, m.gyro, m.accel));
     }
     const auto wall_ns = monotonic() - anchor;
+    bool metric_verified=false;
+#ifdef RM27_JOINT_RUNTIME
+    if(mode=="mono") {
+      const auto* mono=dynamic_cast<const svo::FrameHandlerMono*>(vo.get());
+      metric_verified=mono && mono->metricInitializationVerified();
+    }
+#endif
     vo.reset(); imu.reset(); poses.close(); frames.close();
     struct rusage usage; getrusage(RUSAGE_SELF, &usage);
     auto summary = outputFile(output + "/summary.json");
@@ -228,7 +235,7 @@ int main(int argc, char** argv) {
             << ",\"wall_ns\":" << wall_ns << ",\"peak_rss_kib\":" << usage.ru_maxrss
             << ",\"cpu_user_s\":" << usage.ru_utime.tv_sec + usage.ru_utime.tv_usec / 1e6
             << ",\"cpu_system_s\":" << usage.ru_stime.tv_sec + usage.ru_stime.tv_usec / 1e6
-            << ",\"metric_initialization_verified\":false,\"operational_validity\":false,"
+            << ",\"metric_initialization_verified\":" << (metric_verified?"true":"false") << ",\"operational_validity\":false,"
             << "\"queue_semantics\":\"overdue scheduled replay frames; not a hardware queue\","
             << "\"pose_semantics\":\"native stage kTracking only; no accepted visual correction certificate\"}\n";
     summary.close();
