@@ -72,6 +72,33 @@ The compiled boundary regression tests use a JSON command argv supplied through
 `SCHURVINS_HEADLESS_TEST_COMMAND`. They test actual C++ input refusal, stereo
 pairing and immutable output behavior; absent that command they report a skip.
 
+The separate `../mono-initialization.patch` is an experimental derivative, still
+**FAIL** for full monocular replay. Preparation does not apply it. It contains
+the metric-bootstrap candidate and tested observation-history, ownership and
+joint-update lifecycle repairs; it is not the distributed M3C binary. Apply it
+only to a fresh independently prepared copy of the pinned source. Native research
+regressions are explicitly enabled during configuration:
+
+```sh
+patch --dry-run --batch -p1 -d NEW_HEADLESS_ROOT/src/SchurVINS \
+  < REPO/tools/schurvins/mono-initialization.patch
+patch --batch -p1 -d NEW_HEADLESS_ROOT/src/SchurVINS \
+  < REPO/tools/schurvins/mono-initialization.patch
+cmake REPO/tools/schurvins/headless -DSCHUR_SOURCE=NEW_HEADLESS_ROOT/src \
+  -DSCHUR_DEP_LIB=TARGET_WS/devel/.private/opengv/lib \
+  -DSCHURVINS_TEST_SOURCE_DIR=REPO/tests/fixtures
+cmake --build . -- -j2
+ctest --output-on-failure
+```
+
+Use absolute paths from a new build directory as in the baseline example.
+The five native cases execute alignment, quality, reset/destruction, window
+management and exactly-once camera/point update behavior in the compiled core.
+They are disabled by default and reject a source tree without the research
+initializer. Passing them does not establish continuous monocular tracking;
+full-sequence evidence and remaining failures are in the
+[deployment record](../../../.agents/docs/M3C_DEPLOYMENT.md).
+
 Output streams check open, write, flush and close failures. An unavailable/full
 filesystem causes a nonzero exit; a failure summary is best effort. The compiled
 regression forces a real EFBIG error before estimator startup. Existing measured

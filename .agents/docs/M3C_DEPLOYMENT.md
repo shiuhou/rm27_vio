@@ -137,6 +137,61 @@ checks; simply assigning the arbitrary-scale pose to the filter would not
 establish metric initialization. No estimator, scale, calibration, threshold or
 automatic-restart change was introduced in reviewing the return.
 
+### Isolated repair experiments, 2026-11-02
+
+The opt-in `tools/schurvins/mono-initialization.patch` now also fixes three
+independently reproduced lifecycle defects. Mono tracking quality compares
+mature Schur observations with their own previous count, preserving the existing
+minimum 40, drop 40 and keyframe exception. Reset/destruction detaches the
+frame–landmark ownership cycle. Backward applies each unique landmark's
+conditional correction before evaluating camera–point residuals, and the later
+frontend path no longer applies that correction again. These changes are research
+code; normal source preparation and the distributed runtime do not enable them.
+
+Actual production API fixtures cover quality, reset/destruction, window
+management and exactly-once joint correction, alongside the existing alignment
+fixture; all five compiled CTest cases PASS. The joint test checks an independent
+information-form covariance identity, not a copy of the production update.
+Real-data shadow instrumentation
+also showed one stale-point rejection changing from 0/90 to 49/90 inliers after
+the joint correction. Neither this example nor fixture PASS qualifies mono VIO.
+
+The final original-alignment control retains the original solver and physical
+gates, with the three lifecycle fixes and synchronous depth filtering:
+
+| Complete PC diagnostic | Cameras / IMU | Poses | Result |
+|---|---:|---:|---|
+| V1_01 FivePoint | 2912 / 29120 | 0 | FAIL: metric alignment rejected |
+| V1_01 TwoPoint with IMU rotation prior | 2912 / 29120 | 0 | FAIL: metric alignment rejected |
+| V1_03 FivePoint | 2149 / 21500 | 0 | FAIL: metric alignment rejected |
+| V1_03 TwoPoint with IMU rotation prior | 2149 / 21500 | 0 | FAIL: metric alignment rejected |
+
+All four processes exit zero and consume the complete selected input; none has
+an evaluable trajectory. Zero tracking losses here means Tracking was never
+established. Across all 20 complete mono diagnostic trials, none passed.
+Other full candidate trials reached only 1–8 poses before losing
+tracking and also FAIL. A cumulative-position alignment improved some synthetic
+noise cases but changed the observation weighting and regressed recorded oracle
+windows; it was not promoted. Exact covariance elimination reproduced the old
+solver and its scale attenuation. No camera covariance, scale fit or threshold
+was invented to force acceptance.
+
+The changed joint-update path completed full stereo controls: V1_01 had 2911
+poses, zero loss, ATE 0.039515 m / RPE 1 s 0.042618 m; V1_03 had 2149 poses,
+zero loss, ATE 0.053281 m / RPE 1 s 0.033937 m. These are single diagnostic
+numerical regressions, not accuracy improvements or mono acceptance. A separate
+28-update comparison with an equivalent information-form solve found maximum
+state disagreement 2.98e-8, providing no basis for a speculative solver change.
+
+Sources, binaries, full failed runs, post-run fixed-scale evaluations and native
+test evidence are preserved under `R/mono-repair/`; `repair-result.json` indexes
+them. The remaining software problem is statistically consistent visual–inertial
+bootstrap and sustained accepted updates. The current bootstrap does not export
+a justified joint visual pose/map covariance. This is an unresolved algorithm
+and observation-model issue, not a missing M3C dependency. There is **no new
+qualified mono baseline or replacement ARM64 package** from these experiments.
+The laptop should retain its existing raw results and await a validated package.
+
 ## Measured PC performance
 
 The final checked C++ runtime completed full V1_01 stereo 1× with 2911 poses,
@@ -206,8 +261,12 @@ not replace a five-repeat V1_03 acceptance cohort. Checked PC mono still failed.
 The complete local suite most recently passed **587 tests**, using the existing compatible
 OpenCV 5 environment and sourced ROS2, with the checked C++ binary supplied
 through `SCHURVINS_HEADLESS_TEST_COMMAND`; no C++ boundary tests were skipped.
-This includes all seven compiled boundary tests. The latest rerun accompanies
-the second return at `R/incoming/reviewed-sessions/m3c-20261102T080438Z/host-regression-junit.xml`.
+This includes all seven compiled boundary tests. The repair rerun is at
+`R/mono-repair/host-regression-junit.xml`, with zero failures/errors/skips.
+The five opt-in production-core CTest cases also pass; their actual build and
+execution log is `R/mono-repair/runtime/native-tests-build.log`.
+The previous rerun accompanies the second return at
+`R/incoming/reviewed-sessions/m3c-20261102T080438Z/host-regression-junit.xml`.
 The earlier 583-test result predates four private-resource-tool checks.
 An earlier system-Python run had 520 passes and one pre-existing ChArUco
 API failure; its evidence remains in `R/baseline-software.json`. No test was

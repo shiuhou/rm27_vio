@@ -1,3 +1,16 @@
+--- a/svo/include/svo/frame_handler_base.h
++++ b/svo/include/svo/frame_handler_base.h
+@@ -511,6 +511,10 @@
+   /// Set the tracking quality based on the number of tracked features.
+   virtual void setTrackingQuality(const size_t num_observations);
+
++  /// Apply the same quality rules to an explicitly matching observation history.
++  void setTrackingQuality(const size_t num_observations,
++                          const size_t previous_observations);
++
+   /// Set all cells in detector to occupied in which a point reprojected during
+   /// the reprojection stage.
+   virtual void setDetectorOccupiedCells(
 --- a/svo/include/svo/frame_handler_mono.h
 +++ b/svo/include/svo/frame_handler_mono.h
 @@ -9,6 +9,7 @@
@@ -16,12 +29,16 @@
  
    /// @name Main Interface
    ///
-@@ -85,6 +87,10 @@
+@@ -85,6 +87,14 @@
  
  protected:
  
 +  bool geometric_ready_ = false;
++  // Image matches include immature landmarks; Schur returns only mature,
++  // residual-qualified observations. Never compare the two populations.
++  size_t last_metric_observations_ = 0;
 +  rm27::MonoAlignment mono_alignment_;
++  void setTrackingQuality(const size_t num_observations) override;
 +  bool tryMetricInitialization();
 +  void transformMetricMap(const rm27::MonoAlignmentResult& result);
    // helpers
@@ -191,7 +208,15 @@
 +}
 --- a/svo/include/svo/schur_vins.h
 +++ b/svo/include/svo/schur_vins.h
-@@ -38,6 +38,15 @@
+@@ -29,6 +29,7 @@
+    public:
+     EIGEN_MAKE_ALIGNED_OPERATOR_NEW
+     SchurVINS();
++    ~SchurVINS();
+
+     void InitImuModel(double acc_n, double acc_w, double gyr_n, double gyr_w);
+     void InitExtrinsic(const svo::CameraBundle::Ptr camera_bundle);
+@@ -38,10 +39,18 @@
      void InitObsStddev(double _obs_dev);
      void InitChi2(double chi2_rate);
  
@@ -207,7 +232,19 @@
      void SetKeyframe(const bool _is_keyframe);
      void Forward(const svo::FrameBundle::Ptr frame_bundle);
      int Backward(const svo::FrameBundle::Ptr frame_bundle);
-@@ -91,6 +100,10 @@
+-    bool StructureOptimize(const svo::PointPtr& optimize_points);
+
+    private:
+     class ImuState {
+@@ -64,6 +73,7 @@
+         int64_t id = 0;
+     };
+
++    void ClearWindow();
+     void InitState(double _ts, const Eigen::Vector3d& _acc, const Eigen::Vector3d& _gyr);
+     void AugmentState(const svo::FrameBundle::Ptr frame_bundle);
+     void PredictionState(const Eigen::Vector3d& acc, const Eigen::Vector3d& gyro, double dt);
+@@ -91,6 +101,10 @@
      svo::CameraPtr cam0_param = nullptr, cam1_param = nullptr;
      svo::Transformation T_imu_cam0, T_imu_cam1;
      bool stereo = false;
@@ -280,17 +317,35 @@
  #endif
  
    if (options_.trace_statistics)
-@@ -928,7 +936,8 @@
+@@ -888,6 +896,12 @@
+ //------------------------------------------------------------------------------
+ void FrameHandlerBase::optimizeStructure(const FrameBundle::Ptr& frames, int max_n_pts, int max_iter)
+ {
++#ifdef USE_SCHUR_VINS
++  // Metric Schur updates camera and landmark states together inside Backward.
++  // The frontend optimizer remains responsible for arbitrary-scale bootstrap.
++  if (schur_vins_->MetricReady())
++    return;
++#endif
+   VLOG(40) << "Optimize structure.";
+   // some feature points will be optimized w.r.t keyframes they were observed
+   // in the way that their projection error into all other keyframes is minimzed
+@@ -924,14 +938,8 @@
+     }
+     for (const PointPtr& point : pts)
+     {
+-    #ifndef USE_SCHUR_VINS
        point->optimize(max_iter, optimize_on_sphere);
        point->last_structure_optim_ = frame->id_;
-     #else
+-    #else
 -      schur_vins_->StructureOptimize(point);
-+      if(schur_vins_->MetricReady()) schur_vins_->StructureOptimize(point);
-+      else point->optimize(max_iter, optimize_on_sphere);
-       // point->optimize(max_iter, optimize_on_sphere);
-       point->last_structure_optim_ = frame->id_;
-     #endif
-@@ -1039,6 +1048,10 @@
+-      // point->optimize(max_iter, optimize_on_sphere);
+-      point->last_structure_optim_ = frame->id_;
+-    #endif
+     }
+     num_pts_opt += pts.size();
+   }
+@@ -1039,6 +1047,10 @@
  void FrameHandlerBase::resetVisionFrontendCommon()
  {
    rm27::event("reset", new_frames_);
@@ -301,6 +356,29 @@
    stage_ = Stage::kPaused;
    tracking_quality_ = TrackingQuality::kInsufficient;
    set_reset_ = false;
+@@ -1109,6 +1121,13 @@
+ //------------------------------------------------------------------------------
+ void FrameHandlerBase::setTrackingQuality(const size_t num_observations)
+ {
++  setTrackingQuality(num_observations, num_obs_last_);
++}
++
++//------------------------------------------------------------------------------
++void FrameHandlerBase::setTrackingQuality(const size_t num_observations,
++                                         const size_t previous_observations)
++{
+   tracking_quality_ = TrackingQuality::kGood;
+   if (num_observations < options_.quality_min_fts)
+   {
+@@ -1116,7 +1135,7 @@
+                              << options_.quality_min_fts <<" features!");
+     tracking_quality_ = TrackingQuality::kInsufficient;
+   }
+-  const int feature_drop = static_cast<int>(num_obs_last_) - num_observations;
++  const int feature_drop = static_cast<int>(previous_observations) - num_observations;
+   // seeds are extracted at keyframe,
+   // so the number is not indicative of tracking quality
+   if (!last_frames_->isKeyframe() &&
 --- a/svo/src/frame_handler_mono.cpp
 +++ b/svo/src/frame_handler_mono.cpp
 @@ -9,6 +9,10 @@
@@ -412,10 +490,20 @@
      relocalization_n_trials_ = 0;
      VLOG(1) << "Relocalization successful.";
    }
-@@ -280,8 +327,86 @@
+@@ -280,8 +327,98 @@
    return res;
  }
  
++void FrameHandlerMono::setTrackingQuality(const size_t num_observations) {
++  if (!schur_vins_->MetricReady() || schur_vins_->MonoClonesPending()) {
++    FrameHandlerBase::setTrackingQuality(num_observations);
++    return;
++  }
++  FrameHandlerBase::setTrackingQuality(num_observations,
++                                      last_metric_observations_);
++  last_metric_observations_ = num_observations;
++}
++
 +bool FrameHandlerMono::tryMetricInitialization() {
 +  const auto result=mono_alignment_.solve(cams_->get_T_C_B(0).inverse().getPosition());
 +  if(mono_alignment_.poses.size()>=mono_alignment_.policy.min_frames) {
@@ -426,6 +514,7 @@
 +  transformMetricMap(result);
 +  const Eigen::Quaterniond rotation=Eigen::Quaterniond::FromTwoVectors(result.gravity,Eigen::Vector3d(0,0,-1));
 +  schur_vins_->InitializeMetric(new_frames_, rotation*result.velocity,result.ba,result.bg,rotation*result.gravity);
++  last_metric_observations_ = 0;
 +  imu_handler_->setGyroscopeBias(result.bg);imu_handler_->setAccelerometerBias(result.ba);
 +  schurvinsBackward();
 +  stage_=Stage::kInitializing;tracking_quality_=TrackingQuality::kGood;
@@ -489,6 +578,7 @@
  void FrameHandlerMono::resetAll()
  {
 +  geometric_ready_ = false;
++  last_metric_observations_ = 0;
 +  mono_alignment_.reset();
 +  // A fresh metric bootstrap must use its configured bias priors, not the
 +  // previous epoch's estimated biases retained by ImuHandler::reset().
@@ -501,15 +591,32 @@
      // with the ceres backend we have to make sure to initialize the scale
 --- a/svo/src/schur_vins.cpp
 +++ b/svo/src/schur_vins.cpp
-@@ -28,6 +28,44 @@
+@@ -28,6 +28,61 @@
  
  SchurVINS::SchurVINS() : curr_state(new ImuState()) {
      // LOG(INFO) << "init begins";
 +}
 +
++SchurVINS::~SchurVINS() { ClearWindow(); }
++
++void SchurVINS::ClearWindow() {
++    // Point -> LocalFeature -> Frame -> Point is an owning cycle. Detach
++    // Schur observations before releasing clone and map roots.
++    for (auto& entry : local_pts) {
++        entry.second->local_obs_.clear();
++        entry.second->state_factors.clear();
++    }
++    for (auto& entry : states_map)
++        entry.second->features.clear();
++    states_map.clear();
++    local_pts.clear();
++    schur_pts_.clear();
++    dsw_.resize(0);
++}
++
 +void SchurVINS::Reset() {
 +    ++epoch_;last_visual_constraints_=0;last_visual_correction_=false;
-+    states_map.clear(); local_pts.clear(); schur_pts_.clear();
++    ClearWindow();
 +    curr_state.reset(new ImuState()); prev_imu_ts = -1;
 +    prev_acc.setZero(); prev_gyr.setZero(); id_creator = 0;
 +    curr_fts_cnt = 0; metric_ready_ = false; InitCov();
@@ -546,7 +653,7 @@
  }
  
  void SchurVINS::InitCov() {
-@@ -213,14 +251,16 @@
+@@ -213,14 +268,16 @@
  
  void SchurVINS::Solve3() {
      const int state_size = (int)states_map.size();
@@ -566,7 +673,7 @@
      const int max_frame_idx = states_map.rbegin()->second->frame_bundle->getBundleId();
  
      const int state_len = state_size * 6;
-@@ -246,8 +286,10 @@
+@@ -246,8 +303,10 @@
              curr_pt->register_id_ = curr_state_id;  // avoid init multi times
          }
  
@@ -578,7 +685,7 @@
              // LOG(INFO) << "Solve2 pass invalid point: " << curr_pt->id()
              //           << " feature num : " << curr_pt->local_obs_.size() << " pos: " <<
              //           curr_pt->pos().transpose();
-@@ -419,6 +461,7 @@
+@@ -419,6 +478,7 @@
      // LOG(INFO) << "Bvct:\n" << Bvct;
      StateUpdate(Amtx, Bvct);
  
@@ -586,7 +693,7 @@
      // LOG(ERROR) << "total local pts: " << local_pts.size() << " schur pts: " << schur_pts_.size();
  }
  
-@@ -741,6 +784,7 @@
+@@ -741,6 +801,7 @@
  }
  
  int SchurVINS::Backward(const svo::FrameBundle::Ptr frame_bundle) {
@@ -594,7 +701,41 @@
      rm27::event("schur_backward_begin", frame_bundle, {double(states_map.size())});
      AugmentState(frame_bundle);
      RegisterPoints(frame_bundle);
-@@ -783,6 +827,11 @@
+@@ -760,12 +821,33 @@
+         }
+     }
+
++    // Camera and conditional landmark corrections form one visual update.
++    // Rejecting observations before the point back-substitution compares an
++    // updated camera against stale geometry and can discard valid mono tracks.
++    // schur_pts_ is unique, including landmarks shared by stereo cameras.
++    if (last_visual_constraints_ > 0) {
++        const int min_idx = states_map.begin()->second->frame_bundle->getBundleId();
++        const int max_idx = states_map.rbegin()->second->frame_bundle->getBundleId();
++        for (const auto& point : schur_pts_)
++            point->EkfUpdate(dsw_, obs_dev, focal_length, min_idx, max_idx, huberA, huberB);
++    }
++
+     int num_valid_feature = 0;
+     if (states_map.size() == 1) {
+         num_valid_feature = states_map.rbegin()->second->features.size();
+     } else {
+         num_valid_feature = RemoveOutliers(frame_bundle);  // remove curr frame outlier first
+         RemovePointOutliers();                             // remove local point outlier second
++    }
++    // Preserve the observation provenance used by CheckLocalStatus. Points
++    // updated only through older clones must not be marked as observed now.
++    if (last_visual_constraints_ > 0) {
++        for (const auto& frame : frame_bundle->frames_)
++            for (size_t i = 0; i < frame->numFeatures(); ++i) {
++                const auto& point = frame->landmark_vec_[i];
++                if (point && schur_pts_.count(point))
++                    point->last_structure_optim_ = frame->id_;
++            }
+     }
+
+     {
+@@ -783,24 +865,13 @@
          // LOG(INFO) << "gravity: " << gravity[0] << ", " << gravity[1] << ", " << gravity[2];
      }
  
@@ -605,7 +746,25 @@
 +    }
      rm27::event("schur_backward_end", frame_bundle, {double(num_valid_feature), double(states_map.size())});
      return num_valid_feature;
+-}
+-
+-bool SchurVINS::StructureOptimize(const svo::PointPtr& optimize_point) {
+-    if (schur_pts_.count(optimize_point)) {
+-        const int min_idx = states_map.begin()->second->frame_bundle->getBundleId();
+-        const int max_idx = states_map.rbegin()->second->frame_bundle->getBundleId();
+-        optimize_point->EkfUpdate(dsw_, obs_dev, focal_length, min_idx, max_idx, huberA, huberB);
+-        // optimize_point->EkfUpdate(dsw_, obs_dev);
+-
+-        return true;
+-    }
+-    // LOG(ERROR) << "miss schur point: " << optimize_point->local_obs_.size()
+-    //            << " key obs: " << optimize_point->obs_.size() << " pos: " << optimize_point->pos().norm()
+-    //            << " local status: " << (int)optimize_point->local_status_;
+-
+-    return false;
  }
+
+ int SchurVINS::RemovePointOutliers() {
 --- a/svo_ros/src/svo_factory.cpp
 +++ b/svo_ros/src/svo_factory.cpp
 @@ -455,6 +455,25 @@
