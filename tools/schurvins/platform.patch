@@ -1,0 +1,57 @@
+--- a/svo_cmake/cmake/Modules/SvoSetup.cmake
++++ b/svo_cmake/cmake/Modules/SvoSetup.cmake
+@@ -4,7 +4,7 @@
+ SET(CMAKE_VERBOSE_MAKEFILE OFF)
+ 
+ # user build settings
+-SET(USE_LOOP_CLOSING TRUE)
++SET(USE_LOOP_CLOSING FALSE)
+ SET(USE_GLOBAL_MAP FALSE)
+ 
+ # Set definitions
+@@ -22,13 +22,20 @@
+ 
+ #############################################################################
+ # Set build flags, set ARM_ARCHITECTURE environment variable on Odroid
+-SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -Wall -Werror -D_LINUX -D_REENTRANT -march=native -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unknown-pragmas -Wno-unused-but-set-parameter -Wno-int-in-bool-context -Wno-maybe-uninitialized -Wno-unused-function")
++SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -pthread -Wall -Werror -D_LINUX -D_REENTRANT -Wno-unused-variable -Wno-unused-but-set-variable -Wno-unknown-pragmas -Wno-unused-but-set-parameter -Wno-int-in-bool-context -Wno-maybe-uninitialized -Wno-unused-function")
+ 
+-IF(DEFINED ENV{ARM_ARCHITECTURE})
++# The target processor, not a host environment variable, selects ISA flags.
++STRING(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" SVO_TARGET_PROCESSOR)
++IF(SVO_TARGET_PROCESSOR MATCHES "^(aarch64|arm64)$")
++  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=armv8-a+simd")
++  ADD_DEFINITIONS(-DHAVE_FAST_NEON)
++ELSEIF(SVO_TARGET_PROCESSOR MATCHES "^arm")
+   SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mfpu=neon -march=armv7-a")
+   ADD_DEFINITIONS(-DHAVE_FAST_NEON)
++ELSEIF(SVO_TARGET_PROCESSOR MATCHES "^(x86_64|amd64|i[3-6]86)$")
++  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native -mmmx -msse -msse2 -msse3 -mssse3 -mno-avx")
+ ELSE()
+-  SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mmmx -msse -msse2 -msse3 -mssse3 -mno-avx")
++  MESSAGE(FATAL_ERROR "Unsupported SchurVINS target processor: ${CMAKE_SYSTEM_PROCESSOR}")
+ ENDIF()
+ SET(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -std=c++14")
+ SET(CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS} -O3 -fsee -fomit-frame-pointer -fno-signed-zeros -fno-math-errno -funroll-loops -ffast-math -fno-finite-math-only")
+--- a/svo/package.xml
++++ b/svo/package.xml
+@@ -18,8 +18,6 @@
+   <depend>svo_tracker</depend>
+   <depend>svo_test_utils</depend>
+   <depend>svo_img_align</depend>
+-  <depend>svo_online_loopclosing</depend>
+-  <depend>svo_global_map</depend>
+   <depend>svo_vio_common</depend>
+   <depend>roscpp</depend>
+   <depend>roslib</depend>
+--- a/svo_ros/package.xml
++++ b/svo_ros/package.xml
+@@ -34,8 +34,6 @@
+   <depend>svo_tracker</depend>
+   <depend>svo_backend</depend>
+   <depend>svo_ceres_backend</depend>
+-  <depend>svo_online_loopclosing</depend>
+-  <depend>svo_global_map</depend>
+   <depend>tf</depend>
+   <depend>vikit_common</depend>
+   <depend>vikit_ros</depend>

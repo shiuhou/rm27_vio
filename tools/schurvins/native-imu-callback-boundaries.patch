@@ -1,0 +1,286 @@
+--- a/svo/include/svo/rm27_imu_observation.h
++++ b/svo/include/svo/rm27_imu_observation.h
+@@ -0,0 +1,221 @@
++// RM27 observation-only IMU callback ledger. No estimator decisions or repair.
++#pragma once
++#include <algorithm>
++#include <array>
++#include <cerrno>
++#include <chrono>
++#include <cmath>
++#include <cstdint>
++#include <cstdio>
++#include <cstdlib>
++#include <cstring>
++#include <fcntl.h>
++#include <iomanip>
++#include <locale>
++#include <limits>
++#include <mutex>
++#include <sstream>
++#include <string>
++#include <unistd.h>
++#include <vector>
++
++namespace rm27_imu {
++constexpr std::size_t record_limit = 200000;
++constexpr std::size_t frame_id_limit = 128;
++constexpr std::size_t byte_limit = 128 * 1024 * 1024;
++enum class Disposition { Unfinished=0, HealthRejected=1, Paused=2,
++                         NoHandler=3, BufferAccepted=4, BufferRejected=5 };
++inline const char* disposition_name(Disposition d) {
++  switch(d) {
++    case Disposition::HealthRejected:return "health_rejected";
++    case Disposition::Paused:return "paused";
++    case Disposition::NoHandler:return "no_handler";
++    case Disposition::BufferAccepted:return "buffer_accepted";
++    case Disposition::BufferRejected:return "buffer_rejected";
++    default:return "callback_unfinished";
++  }
++}
++inline std::uint64_t bits(double x) {
++  static_assert(sizeof(double)==sizeof(std::uint64_t) && std::numeric_limits<double>::is_iec559, "IEEE-754 64-bit double required");
++  std::uint64_t value;std::memcpy(&value,&x,sizeof(value));return value;
++}
++inline std::int64_t monotonic_ns() {
++  return std::chrono::duration_cast<std::chrono::nanoseconds>(
++      std::chrono::steady_clock::now().time_since_epoch()).count();
++}
++struct Record {
++  std::uint64_t receipt_sequence=0;
++  std::uint32_t header_sequence=0,raw_sec=0,raw_nsec=0;
++  std::size_t frame_id_size=0;
++  std::array<unsigned char,frame_id_limit> frame_id{};
++  double native_seconds=0;
++  std::array<double,6> values;
++  std::int64_t receipt_ns=0,completion_ns=0;
++  Disposition disposition=Disposition::Unfinished;
++  int health_code=-1;
++};
++
++// Store only fixed-size records during callbacks. File serialization occurs at
++// explicit shutdown, after the SvoInterface callback threads have joined.
++// Missing footer, dropped records and write failures prevent completeness claims.
++class Sink {
++ public:
++  explicit Sink(const std::string& path, std::size_t capacity=record_limit)
++      : capacity_(capacity<=record_limit?capacity:record_limit),startup_ns_(monotonic_ns()) {
++    if(path.empty())return;
++    fd_=::open(path.c_str(),O_WRONLY|O_CREAT|O_EXCL|O_CLOEXEC|O_NOFOLLOW,0600);
++    if(fd_<0) {
++      std::fputs("RM27_SCHUR_IMU_LEDGER_OPEN_FAILED\n",stderr);return;
++    }
++    try { records_.reserve(capacity_); }
++    catch(...) {
++      allocation_failed_=true;
++      std::fputs("RM27_SCHUR_IMU_LEDGER_ALLOCATION_FAILED\n",stderr);
++    }
++  }
++  ~Sink() {
++    // Static teardown or std::exit must not manufacture normal completion.
++    // Only stop() after callback-thread joins may write that closure witness.
++    if(fd_>=0) {
++      std::fputs("RM27_SCHUR_IMU_LEDGER_UNFINALIZED\n",stderr);
++      ::close(fd_);
++    }
++  }
++  Sink(const Sink&)=delete;
++  Sink& operator=(const Sink&)=delete;
++  bool active()const {return fd_>=0 && !closed_;}
++  std::uint64_t begin() {
++    std::lock_guard<std::mutex> guard(mutex_);return attempted_++;
++  }
++  void append(const Record& record) {
++    std::lock_guard<std::mutex> guard(mutex_);
++    if(!active())return;
++    if(allocation_failed_ || records_.size()>=capacity_){++dropped_;return;}
++    records_.push_back(record);
++  }
++  void close(const char* boundary="standalone_test_explicit_close") {
++    std::lock_guard<std::mutex> guard(mutex_);
++    if(!active())return;
++    for(const auto& row:records_) {
++      const auto line=serialize(row);
++      // Reserve 4096 bytes for the closure witness even at the output bound.
++      if(line.size()>8192 || bytes_+line.size()>byte_limit-4096){++output_dropped_;continue;}
++      if(!write_bytes(line))break;
++      ++written_;
++    }
++    std::ostringstream tail;tail.imbue(std::locale::classic());
++    tail << "{\"schema_version\":1,\"kind\":\"schur_imu_ledger_closed\",\"close_boundary\":\""
++      << boundary << "\",\"startup_monotonic_ns\":" << startup_ns_
++      << ",\"attempted_callbacks\":"
++      << attempted_ << ",\"retained_records\":" << records_.size()
++      << ",\"written_records\":" << written_ << ",\"dropped_records\":" << dropped_
++      << ",\"output_dropped_records\":" << output_dropped_
++      << ",\"record_capacity\":" << capacity_ << ",\"byte_limit\":" << byte_limit
++      << ",\"allocation_failed\":" << (allocation_failed_?"true":"false")
++      << ",\"io_failed\":" << (failed_?"true":"false")
++      << ",\"monotonic_ns\":" << monotonic_ns() << "}\n";
++    if(!failed_)write_bytes(tail.str());
++    if(::close(fd_)!=0)std::fputs("RM27_SCHUR_IMU_LEDGER_CLOSE_FAILED\n",stderr);
++    fd_=-1;closed_=true;
++  }
++ private:
++  static void number(std::ostream& out,double value) {
++    // Upstream Release disables signed zeros. Classify the saved IEEE bits,
++    // not floating predicates that the optimizer may legally fold.
++    const auto raw=bits(value);
++    if((raw & 0x7fffffffffffffffULL)==0)
++      out << ((raw >> 63)?"-0.0":"0.0");
++    else if((raw & 0x7ff0000000000000ULL)==0x7ff0000000000000ULL)out << "null";
++    else out << std::setprecision(17) << value;
++  }
++  static std::string serialize(const Record& row) {
++    std::ostringstream out;out.imbue(std::locale::classic());
++    out << "{\"schema_version\":1,\"kind\":\"schur_imu_callback\",\"receipt_sequence\":"
++      << row.receipt_sequence << ",\"header_sequence\":" << row.header_sequence
++      << ",\"sensor_id\":\"imu0\",\"raw_sec\":" << row.raw_sec
++      << ",\"raw_nsec\":" << row.raw_nsec
++      << ",\"sensor_ns\":" << std::uint64_t(row.raw_sec)*1000000000ULL+row.raw_nsec
++      << ",\"frame_id_size\":" << row.frame_id_size
++      << ",\"frame_id_truncated\":" << (row.frame_id_size>frame_id_limit?"true":"false")
++      << ",\"frame_id_hex\":\"";
++    constexpr char hex[]="0123456789abcdef";
++    for(std::size_t i=0;i<std::min(row.frame_id_size,frame_id_limit);++i)
++      out << hex[row.frame_id[i]>>4] << hex[row.frame_id[i]&15];
++    out << "\",\"native_seconds\":";number(out,row.native_seconds);
++    out << ",\"native_seconds_bits\":" << bits(row.native_seconds)
++      << ",\"receipt_monotonic_ns\":" << row.receipt_ns
++      << ",\"completion_monotonic_ns\":" << row.completion_ns
++      << ",\"disposition\":\"" << disposition_name(row.disposition)
++      << "\",\"health_code\":" << row.health_code << ",\"values\":[";
++    for(std::size_t i=0;i<row.values.size();++i){if(i)out<<',';number(out,row.values[i]);}
++    out << "],\"value_bits\":[";
++    for(std::size_t i=0;i<row.values.size();++i){if(i)out<<',';out<<bits(row.values[i]);}
++    out << "]}\n";return out.str();
++  }
++  bool write_bytes(const std::string& line) {
++    const char* cursor=line.data();std::size_t left=line.size();
++    while(left) {
++      const auto amount=::write(fd_,cursor,left);
++      if(amount<0 && errno==EINTR)continue;
++      if(amount<=0) {
++        failed_=true;std::fputs("RM27_SCHUR_IMU_LEDGER_WRITE_FAILED\n",stderr);return false;
++      }
++      cursor+=amount;left-=static_cast<std::size_t>(amount);bytes_+=static_cast<std::size_t>(amount);
++    }
++    return true;
++  }
++  int fd_=-1;
++  const std::size_t capacity_;
++  const std::int64_t startup_ns_;
++  bool closed_=false,failed_=false,allocation_failed_=false;
++  std::uint64_t attempted_=0,dropped_=0,output_dropped_=0,written_=0,bytes_=0;
++  std::vector<Record> records_;
++  std::mutex mutex_;
++};
++inline std::string path() {
++  const char* explicit_path=std::getenv("RM27_SCHUR_IMU_LEDGER");
++  if(explicit_path && *explicit_path)return explicit_path;
++  const char* native_path=std::getenv("RM27_NATIVE_EVENTS");
++  return native_path && *native_path?std::string(native_path)+".imu-ledger.jsonl":"";
++}
++// start() runs in the interface constructor, before subscriptions or callbacks.
++// Callback construction only reads this pointer: no first-callback open/reserve.
++inline Sink*& started_sink(){static Sink* instance=nullptr;return instance;}
++inline void start(){static Sink instance(path());started_sink()=&instance;}
++inline void stop() noexcept {
++  if(!started_sink())return;
++  try {started_sink()->close("svo_interface_callback_threads_joined");}
++  catch(...) {
++    // Keep diagnostic serialization failures from throwing through an estimator
++    // destructor. With no closure witness, completeness cannot be claimed.
++    std::fputs("RM27_SCHUR_IMU_LEDGER_FINALIZATION_FAILED\n",stderr);
++  }
++}
++
++class Callback {
++ public:
++  Callback(std::uint32_t sec,std::uint32_t nsec,std::uint32_t header_sequence,
++           const std::string& frame_id,double native_seconds,std::array<double,6> values)
++      : receipt_ns_(monotonic_ns()),sink_(started_sink()) {
++    if(!sink_ || !sink_->active()){sink_=nullptr;return;}
++    row_.receipt_ns=receipt_ns_;row_.receipt_sequence=sink_->begin();
++    row_.raw_sec=sec;row_.raw_nsec=nsec;row_.header_sequence=header_sequence;
++    row_.frame_id_size=frame_id.size();
++    std::copy_n(frame_id.data(),std::min(frame_id.size(),frame_id_limit),row_.frame_id.begin());
++    row_.native_seconds=native_seconds;row_.values=values;
++  }
++  ~Callback() {
++    if(!sink_)return;
++    row_.completion_ns=monotonic_ns();sink_->append(row_);
++  }
++  Callback(const Callback&)=delete;
++  Callback& operator=(const Callback&)=delete;
++  void finish(Disposition disposition,int health_code=0) {
++    row_.disposition=disposition;row_.health_code=health_code;
++  }
++ private:
++  const std::int64_t receipt_ns_;
++  Sink* sink_;
++  Record row_;
++};
++}  // namespace rm27_imu
+--- a/svo_ros/src/svo_interface.cpp
++++ b/svo_ros/src/svo_interface.cpp
+@@ -3,6 +3,7 @@
+ // (All authors of SchurVINS are with PICO department of ByteDance Corporation)
+ #include <svo_ros/svo_interface.h>
+ #include <svo/rm27_diagnostics.h>
++#include <svo/rm27_imu_observation.h>
+ #include <algorithm>
+ 
+ #include <ros/callback_queue.h>
+@@ -61,6 +62,7 @@
+   , automatic_reinitialization_(
+       vk::param<bool>(pnh_, "automatic_reinitialization", false))
+ {
++  rm27_imu::start(); // Allocate observer storage before any callback can run.
+   switch (pipeline_type)
+   {
+     case PipelineType::kMono:
+@@ -146,6 +148,7 @@
+     imu_thread_->join();
+   if (image_thread_)
+     image_thread_->join();
++  rm27_imu::stop(); // Both callback threads have joined; seal observation only.
+   VLOG(1) << "Destructed SVO.";
+ }
+ 
+@@ -481,6 +484,10 @@
+ 
+ void SvoInterface::imuCallback(const sensor_msgs::ImuConstPtr& msg)
+ {
++  rm27_imu::Callback observation(msg->header.stamp.sec,msg->header.stamp.nsec,
++      msg->header.seq,msg->header.frame_id,msg->header.stamp.toSec(),
++      {{msg->angular_velocity.x,msg->angular_velocity.y,msg->angular_velocity.z,
++        msg->linear_acceleration.x,msg->linear_acceleration.y,msg->linear_acceleration.z}});
+   const Eigen::Vector3d omega_imu(
+         msg->angular_velocity.x, msg->angular_velocity.y, msg->angular_velocity.z);
+   const Eigen::Vector3d lin_acc_imu(
+@@ -493,13 +500,20 @@
+     if(pending_imu_fault_==rm27::InputFault::None) {
+       pending_imu_fault_=health;pending_imu_fault_ns_=msg->header.stamp.toNSec();
+     }
++    observation.finish(rm27_imu::Disposition::HealthRejected,static_cast<int>(health));
+     return;
+   }
+-  if(input_failure_paused_)return;
+-  if(imu_handler_)
+-    imu_handler_->addImuMeasurement(m);
+-  else
++  if(input_failure_paused_) {
++    observation.finish(rm27_imu::Disposition::Paused);return;
++  }
++  if(imu_handler_) {
++    const bool added=imu_handler_->addImuMeasurement(m);
++    observation.finish(added?rm27_imu::Disposition::BufferAccepted:
++                             rm27_imu::Disposition::BufferRejected);
++  } else {
++    observation.finish(rm27_imu::Disposition::NoHandler);
+     SVO_ERROR_STREAM("SvoNode has no ImuHandler");
++  }
+ }
+ 
+ void SvoInterface::inputKeyCallback(const std_msgs::StringConstPtr& key_input)

@@ -109,6 +109,8 @@ def test_symmetric_circles_grid_validation_and_detection():
 
 
 def test_charuco_detected_ids_and_invalid_marker():
+    if not hasattr(cv2, 'aruco') or not hasattr(cv2.aruco, 'CharucoDetector'):
+        pytest.skip('installed OpenCV has no usable ChArUco detector')
     data = dict(type='charuco', squares_x=7, squares_y=5, square_length_m=.03,
                 marker_length_m=.022, dictionary='DICT_5X5_100', physical_target_id='SYNTHETIC')
     validate_target(data)

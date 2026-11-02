@@ -10,7 +10,7 @@ from rm27.perception.vision.localization.experiments.runner import run
 ROOT = Path(__file__).resolve().parents[1]
 
 
-@pytest.mark.parametrize('backend', ['stella_vslam', 'ORB-SLAM3', 'unknown', None])
+@pytest.mark.parametrize('backend', ['stella_vslam', 'ORB-SLAM3', 'SchurVINS', 'unknown', None])
 def test_runner_rejects_non_vio_before_creating_output(tmp_path, backend):
     output = tmp_path/'must-not-exist'
     with pytest.raises(ExperimentError, match='BACKEND_UNSUPPORTED'):

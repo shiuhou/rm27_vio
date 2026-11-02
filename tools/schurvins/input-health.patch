@@ -1,0 +1,350 @@
+--- a/svo/include/svo/rm27_input_health.h
++++ b/svo/include/svo/rm27_input_health.h
+@@ -0,0 +1,70 @@
++// RM27 input guards. Sensor order is preserved; no sorting or interpolation.
++#pragma once
++#include <cstdint>
++#include <cstddef>
++#include <cmath>
++namespace rm27 {
++// This is the estimator's existing strict Prediction(dt < .015) bound, not a
++// flight safety policy or a sensor noise parameter.
++constexpr int64_t schur_max_imu_gap_ns=15000000;
++constexpr double schur_max_imu_gap_s=.015;
++enum class InputFault { None=0, CameraTimestamp=1, CameraOrder=2,
++    ImuNonfinite=3, ImuOrder=4, ImuGap=5, ImuCoverage=6 };
++inline const char* inputFaultName(InputFault fault) {
++    switch(fault) {
++      case InputFault::CameraTimestamp:return "input_rejected_camera_timestamp";
++      case InputFault::CameraOrder:return "input_rejected_camera_order";
++      case InputFault::ImuNonfinite:return "input_invalid_imu_nonfinite";
++      case InputFault::ImuOrder:return "input_invalid_imu_order";
++      case InputFault::ImuGap:return "input_invalid_imu_gap";
++      case InputFault::ImuCoverage:return "input_invalid_imu_coverage";
++      default:return "input_healthy";
++    }
++}
++class CameraInputOrder {
++ public:
++    int64_t latest=-1;
++    InputFault accept(int64_t timestamp) {
++      if(timestamp<=0)return InputFault::CameraTimestamp;
++      if(latest>=timestamp)return InputFault::CameraOrder;
++      latest=timestamp;return InputFault::None;
++    }
++};
++class ImuInputOrder {
++ public:
++    int64_t latest=-1;
++    void reset(){latest=-1;}
++    InputFault accept(int64_t timestamp,bool finite) {
++      if(timestamp<=0 || !finite)return InputFault::ImuNonfinite;
++      if(latest>=timestamp)return InputFault::ImuOrder;
++      const bool gap=latest>=0 && timestamp-latest>=schur_max_imu_gap_ns;
++      latest=timestamp;
++      return gap?InputFault::ImuGap:InputFault::None;
++    }
++};
++// Samples must be in the original chronological order. Camera time is mapped
++// by the explicitly loaded calibration before this function is called.
++template<class Samples>
++InputFault imuIntervalHealth(const Samples& samples,double begin,double end) {
++    if(!std::isfinite(begin) || !std::isfinite(end) || end<begin || samples.size()<2)
++      return InputFault::ImuCoverage;
++    if(!std::isfinite(samples.front().timestamp_) || !std::isfinite(samples.back().timestamp_))
++      return InputFault::ImuNonfinite;
++    if(samples.front().timestamp_>begin || samples.back().timestamp_<end)
++      return InputFault::ImuCoverage;
++    for(size_t i=0;i<samples.size();++i) {
++      const auto& sample=samples[i];
++      if(!std::isfinite(sample.timestamp_) || !sample.angular_velocity_.allFinite()
++          || !sample.linear_acceleration_.allFinite())return InputFault::ImuNonfinite;
++      if(i==0)continue;
++      const double dt=sample.timestamp_-samples[i-1].timestamp_;
++      if(dt<=0)return InputFault::ImuOrder;
++      // Check exactly the intervals which the estimator will use. Older
++      // startup/history samples outside the requested range do not imply a
++      // current gap; they are still checked above for finite values and order.
++      if(sample.timestamp_>begin && samples[i-1].timestamp_<end && dt>=schur_max_imu_gap_s)
++        return InputFault::ImuGap;
++    }
++    return InputFault::None;
++}
++}  // namespace rm27
+--- a/svo/include/svo/rm27_diagnostics.h
++++ b/svo/include/svo/rm27_diagnostics.h
+@@ -9,8 +9,9 @@
+ #include <initializer_list>
+ #include <mutex>
+ namespace rm27 {
+-inline void event(const char* kind, const svo::FrameBundle::Ptr& frame,
+-                  std::initializer_list<double> values = {}) {
++inline void eventAtTimestamp(const char* kind, int64_t sensor_ns, int64_t bundle_id=-1,
++                  std::initializer_list<double> values = {},
++                  int64_t source_sensor_ns=-1, const char* source_stream="camera") {
+   const char* path = std::getenv("RM27_NATIVE_EVENTS");
+   if (!path) return;
+   static std::mutex mutex;
+@@ -20,8 +21,8 @@
+   if (count++ >= 200000) return;
+   const auto now = std::chrono::steady_clock::now().time_since_epoch();
+   stream << "{\"schema_version\":1,\"kind\":\"" << kind
+-         << "\",\"sensor_ns\":" << (frame ? frame->getMinTimestampNanoseconds() : -1)
+-         << ",\"bundle_id\":" << (frame ? frame->getBundleId() : -1)
++         << "\",\"sensor_ns\":" << sensor_ns
++         << ",\"bundle_id\":" << bundle_id
+          << ",\"monotonic_ns\":" << std::chrono::duration_cast<std::chrono::nanoseconds>(now).count()
+          << ",\"values\":[";
+   bool first = true;
+@@ -31,7 +32,15 @@
+     if (std::isfinite(x)) stream << std::setprecision(17) << x;
+     else stream << "null";
+   }
+-  stream << "]}\n";
++  stream << "]";
++  if(source_sensor_ns>=0)stream << ",\"source_sensor_ns\":" << source_sensor_ns
++      << ",\"source_stream\":\"" << source_stream << "\"";
++  stream << "}\n";
+   stream.flush();
+ }
++inline void event(const char* kind, const svo::FrameBundle::Ptr& frame,
++                  std::initializer_list<double> values = {}) {
++  eventAtTimestamp(kind,frame?frame->getMinTimestampNanoseconds():-1,
++                   frame?frame->getBundleId():-1,values);
+ }
++}
+--- a/svo/include/svo/imu_handler.h
++++ b/svo/include/svo/imu_handler.h
+@@ -175,7 +175,7 @@
+ 
+   double getLatestTimestamp() const{
+     ulock_t lock(measurements_mut_);
+-    return measurements_.front().timestamp_;
++    return measurements_.empty()?-1:measurements_.front().timestamp_;
+   }
+ 
+   bool waitTill(const double timestamp_sec, const double timeout_sec=1.0);
+--- a/svo/include/svo/frame_handler_base.h
++++ b/svo/include/svo/frame_handler_base.h
+@@ -282,6 +282,10 @@
+ 
+   /// Will reset the map as soon as the current frame is finished processing.
+   void reset() { set_reset_ = true; }
++
++  // Called only from the image processing thread before/inside a bundle.
++  // Unlike deferred reset(), invalid input must clear the state immediately.
++  void invalidateInput(int64_t sensor_ns);
+ 
+   /// Get the current stage of the algorithm.
+   inline Stage stage() const { return stage_; }
+--- a/svo/src/frame_handler_base.cpp
++++ b/svo/src/frame_handler_base.cpp
+@@ -1,4 +1,5 @@
+ #include <svo/rm27_diagnostics.h>
++#include <svo/rm27_input_health.h>
+ // This file is part of SVO - Semi-direct Visual Odometry.
+ //
+ // Copyright (C) 2014 Christian Forster <forster at ifi dot uzh dot ch>
+@@ -367,6 +368,17 @@
+   }
+ #endif
+ 
++  if(schur_vins_ && imu_handler_) {
++    const double begin=last_frames_?last_frames_->getMinTimestampSeconds():
++        (frame_bundle->imu_datas_.empty()?frame_bundle->getMinTimestampSeconds():frame_bundle->imu_datas_.front().timestamp_);
++    const auto health=rm27::imuIntervalHealth(frame_bundle->imu_datas_,begin,frame_bundle->getMinTimestampSeconds());
++    if(health!=rm27::InputFault::None) {
++      rm27::event(rm27::inputFaultName(health),frame_bundle,{double(static_cast<int>(health))});
++      invalidateInput(frame_bundle->getMinTimestampNanoseconds());
++      return false;
++    }
++  }
++
+   rm27::event("imu_interval", frame_bundle, {double(frame_bundle->imu_ready_), double(frame_bundle->imu_datas_.size()), frame_bundle->imu_datas_.empty() ? -1 : frame_bundle->imu_datas_.front().timestamp_, frame_bundle->imu_datas_.empty() ? -1 : frame_bundle->imu_datas_.back().timestamp_});
+   // handle motion prior
+   if (have_motion_prior_)
+@@ -1045,6 +1057,15 @@
+ }
+ 
+ //------------------------------------------------------------------------------
++void FrameHandlerBase::invalidateInput(int64_t sensor_ns)
++{
++  rm27::eventAtTimestamp("input_invalidated",sensor_ns);
++  resetAll();
++  // Startup reset may have no frame pointers, so resetCommon's guarded clear
++  // is insufficient here. No previous-epoch sample may seed a fresh filter.
++  if(imu_handler_)imu_handler_->reset();
++}
++
+ void FrameHandlerBase::resetVisionFrontendCommon()
+ {
+   rm27::event("reset", new_frames_);
+--- a/svo_ros/include/svo_ros/svo_interface.h
++++ b/svo_ros/include/svo_ros/svo_interface.h
+@@ -1,6 +1,9 @@
+ #pragma once
+ 
+ #include <thread>
++#include <mutex>
++#include <atomic>
++#include <svo/rm27_input_health.h>
+ 
+ #include <ros/ros.h>
+ #include <std_msgs/String.h>    // user-input
+@@ -72,6 +75,16 @@
+       int64_t timestamp_nanoseconds);
+ 
+   bool setImuPrior(const int64_t timestamp_nanoseconds);
++  bool acceptInput(const int64_t timestamp_nanoseconds);
++  void rejectImuInput(rm27::InputFault fault, int64_t camera_ns, int64_t source_ns=-1);
++
++  // IMU thread only latches faults; image thread owns estimator resets.
++  std::mutex input_health_mutex_;
++  rm27::CameraInputOrder camera_input_order_;
++  rm27::ImuInputOrder imu_input_order_;
++  rm27::InputFault pending_imu_fault_=rm27::InputFault::None;
++  int64_t pending_imu_fault_ns_=-1;
++  std::atomic<bool> input_failure_paused_{false};
+ 
+   void publishResults(
+       const std::vector<cv::Mat>& images,
+--- a/svo_ros/src/svo_interface.cpp
++++ b/svo_ros/src/svo_interface.cpp
+@@ -2,6 +2,8 @@
+ // This file may have been modified by the authors of SchurVINS.
+ // (All authors of SchurVINS are with PICO department of ByteDance Corporation)
+ #include <svo_ros/svo_interface.h>
++#include <svo/rm27_diagnostics.h>
++#include <algorithm>
+ 
+ #include <ros/callback_queue.h>
+ 
+@@ -169,7 +171,15 @@
+       }
+     }
+   }
+-  svo_->addImageBundle(images, timestamp_nanoseconds);
++  const bool processed=svo_->addImageBundle(images, timestamp_nanoseconds);
++  if(!processed && svo_->stage()==Stage::kPaused && !svo_->getLastFrames()) {
++    // The actual extracted IMU interval may have failed after boundary checks.
++    // This method's callers retain their single normal publishResults call.
++    std::lock_guard<std::mutex> lock(input_health_mutex_);
++    if(imu_handler_)imu_handler_->reset();
++    imu_input_order_.reset();pending_imu_fault_=rm27::InputFault::None;pending_imu_fault_ns_=-1;
++    input_failure_paused_=!automatic_reinitialization_;
++  }
+ }
+ 
+ void SvoInterface::publishResults(
+@@ -280,6 +290,63 @@
+ #endif
+ }
+ 
++void SvoInterface::rejectImuInput(rm27::InputFault fault,int64_t camera_ns,int64_t source_ns)
++{
++  rm27::eventAtTimestamp(rm27::inputFaultName(fault),camera_ns,-1,
++      {double(static_cast<int>(fault)),automatic_reinitialization_?1.0:0.0},source_ns,"imu0");
++  // Keep lock ordering identical to imuCallback: health mutex, then IMU mutex.
++  std::lock_guard<std::mutex> lock(input_health_mutex_);
++  svo_->invalidateInput(camera_ns);
++  imu_input_order_.reset();pending_imu_fault_=rm27::InputFault::None;pending_imu_fault_ns_=-1;
++  input_failure_paused_=!automatic_reinitialization_;
++  // Paused/insufficient Info reaches the observer on its receipt clock. Never
++  // publish a pose here, and return from acceptInput before the normal path.
++  visualizer_->publishSvoInfo(svo_.get(),camera_ns);
++  if(automatic_reinitialization_)svo_->start();
++}
++
++bool SvoInterface::acceptInput(const int64_t timestamp_nanoseconds)
++{
++  const auto camera_health=camera_input_order_.accept(timestamp_nanoseconds);
++  if(camera_health!=rm27::InputFault::None) {
++    // Boundary rejection precedes getRelativeRotationPrior/getMeasurements.
++    // Preserve the original integer source time; never sort or retimestamp it.
++    rm27::eventAtTimestamp(rm27::inputFaultName(camera_health),timestamp_nanoseconds,-1,
++        {double(static_cast<int>(camera_health)),automatic_reinitialization_?1.0:0.0});
++    return false;
++  }
++  if(input_failure_paused_) {
++    visualizer_->publishSvoInfo(svo_.get(),timestamp_nanoseconds);return false;
++  }
++  if(!imu_handler_)return true;
++  rm27::InputFault pending;int64_t pending_ns;
++  {
++    std::lock_guard<std::mutex> lock(input_health_mutex_);
++    pending=pending_imu_fault_;pending_ns=pending_imu_fault_ns_;
++  }
++  if(pending!=rm27::InputFault::None) {
++    rejectImuInput(pending,timestamp_nanoseconds,pending_ns);return false;
++  }
++  const double end=timestamp_nanoseconds*common::conversions::kNanoSecondsToSeconds;
++  const bool ready=imu_handler_->waitTill(end);
++  ImuMeasurements samples=imu_handler_->getMeasurementsCopy();
++  std::reverse(samples.begin(),samples.end()); // original storage is newest-first
++  for(auto& sample:samples)sample.timestamp_+=imu_handler_->imu_calib_.delay_imu_cam;
++  const bool prior_frame=bool(svo_->getLastFrames());
++  const double begin=prior_frame?svo_->getLastFrames()->getMinTimestampSeconds():
++      (samples.empty()?end:samples.front().timestamp_);
++  const auto health=ready?rm27::imuIntervalHealth(samples,begin,end):rm27::InputFault::ImuCoverage;
++  if(health!=rm27::InputFault::None) {
++    // Lack of startup coverage remains initialization. Once a state exists,
++    // incomplete input invalidates it and clears every cross-epoch buffer.
++    if(!prior_frame && health==rm27::InputFault::ImuCoverage) {
++      rm27::eventAtTimestamp("input_waiting_imu_coverage",timestamp_nanoseconds);return false;
++    }
++    rejectImuInput(health,timestamp_nanoseconds);return false;
++  }
++  return true;
++}
++
+ bool SvoInterface::setImuPrior(const int64_t timestamp_nanoseconds)
+ {
+   if(svo_->getBundleAdjuster())
+@@ -331,7 +398,7 @@
+ 
+ void SvoInterface::monoCallback(const sensor_msgs::ImageConstPtr& msg)
+ {
+-  if(idle_)
++  if(idle_ || !acceptInput(msg->header.stamp.toNSec()))
+     return;
+ 
+   cv::Mat image;
+@@ -370,8 +437,12 @@
+     const sensor_msgs::ImageConstPtr& msg0,
+     const sensor_msgs::ImageConstPtr& msg1)
+ {
+-  if(idle_)
++  if(idle_ || !acceptInput(msg0->header.stamp.toNSec()))
+     return;
++  if(msg0->header.stamp!=msg1->header.stamp) {
++    rm27::eventAtTimestamp("input_rejected_stereo_time",msg0->header.stamp.toNSec(),-1,{},
++        msg1->header.stamp.toNSec(),"cam1");return;
++  }
+ 
+   cv::Mat img0, img1;
+   try {
+@@ -405,6 +476,16 @@
+   const Eigen::Vector3d lin_acc_imu(
+         msg->linear_acceleration.x, msg->linear_acceleration.y, msg->linear_acceleration.z);
+   const ImuMeasurement m(msg->header.stamp.toSec(), omega_imu, lin_acc_imu);
++  std::lock_guard<std::mutex> lock(input_health_mutex_);
++  const auto health=imu_input_order_.accept(msg->header.stamp.toNSec(),
++      omega_imu.allFinite() && lin_acc_imu.allFinite());
++  if(health!=rm27::InputFault::None) {
++    if(pending_imu_fault_==rm27::InputFault::None) {
++      pending_imu_fault_=health;pending_imu_fault_ns_=msg->header.stamp.toNSec();
++    }
++    return;
++  }
++  if(input_failure_paused_)return;
+   if(imu_handler_)
+     imu_handler_->addImuMeasurement(m);
+   else
+@@ -428,6 +509,7 @@
+       SVO_INFO_STREAM("SVO user input: RESET");
+       break;
+     case 's':
++      input_failure_paused_=false;
+       svo_->start();
+       idle_ = false;
+       SVO_INFO_STREAM("SVO user input: START");

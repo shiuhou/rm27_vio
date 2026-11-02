@@ -1,0 +1,35 @@
+--- a/ov_msckf/src/state/Propagator.cpp
++++ b/ov_msckf/src/state/Propagator.cpp
+@@ -162,13 +162,19 @@
+   // First lets construct an IMU vector of measurements we need
+   double time0 = cache_state_time + cache_t_off;
+   double time1 = timestamp + cache_t_off;
++  // Capture the cache actually selected by this call, before integration moves it.
++  const double rm27_cache_state_time_at_entry = cache_state_time;
++  const double rm27_cache_offset_at_entry = cache_t_off;
+   std::vector<ov_core::ImuData> prop_data;
+   {
+     std::lock_guard<std::mutex> lck(imu_data_mtx);
+     prop_data = Propagator::select_imu_readings(imu_data, time0, time1, false);
+   }
+-  if (prop_data.size() < 2)
++  if (prop_data.size() < 2) {
++    // Read-only witness: no prediction was produced; outputs remain untouched.
++    rm27_ov::event("imu_fast_prediction_unavailable", timestamp, {time0, time1, state->_timestamp, rm27_cache_state_time_at_entry, rm27_cache_offset_at_entry});
+     return false;
++  }
+ 
+   // Biases
+   Eigen::Vector3d bias_g = cache_state_est.block(10, 0, 3, 1);
+@@ -273,6 +279,11 @@
+   covariance.block(0, 0, 9, 9) = covariance_tmp.block(0, 0, 9, 9);
+   double dt = prop_data.at(prop_data.size() - 1).timestamp - prop_data.at(prop_data.size() - 2).timestamp;
+   covariance.block(9, 9, 3, 3) = _noises.sigma_w_2 / dt * Eigen::Matrix3d::Identity();
++  // This is the actual fast prediction endpoint, not a new visual correction.
++  // Log flags only: covariance existence/finiteness is not tracking quality.
++  if (rm27_ov::enabled())
++    rm27_ov::event("imu_fast_prediction_completed", timestamp,
++        {time0, time1, state->_timestamp, rm27_cache_state_time_at_entry, rm27_cache_offset_at_entry, state_plus.allFinite() ? 1.0 : 0.0, covariance.allFinite() ? 1.0 : 0.0});
+   return true;
+ }
+ 

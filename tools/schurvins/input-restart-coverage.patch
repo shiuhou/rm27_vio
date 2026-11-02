@@ -1,0 +1,41 @@
+--- a/svo/include/svo/rm27_input_health.h
++++ b/svo/include/svo/rm27_input_health.h
+@@ -42,6 +42,12 @@
+       return gap?InputFault::ImuGap:InputFault::None;
+     }
+ };
++// A reset discards the old epoch's IMU buffer. Until a first frame is
++// accepted, incomplete new-epoch coverage is initialization, not another
++// sensor failure. The same missing coverage after a state exists is invalid.
++inline bool waitForInitialImuCoverage(InputFault health,bool has_previous_frame) {
++    return health==InputFault::ImuCoverage && !has_previous_frame;
++}
+ // Samples must be in the original chronological order. Camera time is mapped
+ // by the explicitly loaded calibration before this function is called.
+ template<class Samples>
+--- a/svo/src/frame_handler_base.cpp
++++ b/svo/src/frame_handler_base.cpp
+@@ -373,6 +373,12 @@
+         (frame_bundle->imu_datas_.empty()?frame_bundle->getMinTimestampSeconds():frame_bundle->imu_datas_.front().timestamp_);
+     const auto health=rm27::imuIntervalHealth(frame_bundle->imu_datas_,begin,frame_bundle->getMinTimestampSeconds());
+     if(health!=rm27::InputFault::None) {
++      if(rm27::waitForInitialImuCoverage(health,bool(last_frames_))) {
++        // set_start_ can reset after the ROS boundary already checked coverage.
++        // Do not process this frame or reset again; await fresh epoch samples.
++        rm27::event("input_waiting_imu_coverage",frame_bundle);
++        return false;
++      }
+       rm27::event(rm27::inputFaultName(health),frame_bundle,{double(static_cast<int>(health))});
+       invalidateInput(frame_bundle->getMinTimestampNanoseconds());
+       return false;
+--- a/svo_ros/src/svo_interface.cpp
++++ b/svo_ros/src/svo_interface.cpp
+@@ -339,7 +339,7 @@
+   if(health!=rm27::InputFault::None) {
+     // Lack of startup coverage remains initialization. Once a state exists,
+     // incomplete input invalidates it and clears every cross-epoch buffer.
+-    if(!prior_frame && health==rm27::InputFault::ImuCoverage) {
++    if(rm27::waitForInitialImuCoverage(health,prior_frame)) {
+       rm27::eventAtTimestamp("input_waiting_imu_coverage",timestamp_nanoseconds);return false;
+     }
+     rejectImuInput(health,timestamp_nanoseconds);return false;

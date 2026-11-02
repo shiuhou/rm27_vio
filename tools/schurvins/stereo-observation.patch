@@ -1,0 +1,68 @@
+--- a/svo/src/frame_handler_stereo.cpp
++++ b/svo/src/frame_handler_stereo.cpp
+@@ -11,6 +11,7 @@
+ // (All authors of SchurVINS are with PICO department of ByteDance Corporation)
+ 
+ #include <svo/frame_handler_stereo.h>
++#include <svo/rm27_diagnostics.h>
+ #include <svo/map.h>
+ #include <svo/common/frame.h>
+ #include <svo/common/point.h>
+@@ -75,6 +76,14 @@
+     return UpdateResult::kDefault;
+   }
+ 
++  // Observations only: stereo depth uses the calibrated inter-camera
++  // translation in StereoTriangulation, rather than a fitted trajectory scale.
++  const auto baseline=(new_frames_->at(1)->T_cam_body_*new_frames_->at(0)->T_body_cam_).getPosition().norm();
++  rm27::event("stereo_metric_geometry_ready",new_frames_,{
++    double(new_frames_->at(0)->getNFrameIndex()),double(new_frames_->at(1)->getNFrameIndex()),
++    baseline,double(new_frames_->at(0)->numLandmarks()),double(new_frames_->at(1)->numLandmarks()),
++    new_frames_->imu_ready_?1.0:0.0});
++
+   new_frames_->at(0)->setKeyframe();
+   map_->addKeyframe(new_frames_->at(0),
+                     bundle_adjustment_type_==BundleAdjustmentType::kCeres);
+@@ -97,6 +106,12 @@
+   SVO_INFO_STREAM("Init: Selected first frame.");
+   stage_ = Stage::kTracking;
+   tracking_quality_ = TrackingQuality::kGood;
++  // This records completed stereo bootstrap, not a visual filter correction.
++  // The first Backward can legitimately bypass Solve3 with one cloned state.
++  rm27::event("stereo_metric_initialized",new_frames_,{
++    double(new_frames_->at(0)->getNFrameIndex()),double(new_frames_->at(1)->getNFrameIndex()),
++    baseline,double(new_frames_->at(0)->numLandmarks()),double(new_frames_->at(1)->numLandmarks()),
++    double(stage_),double(tracking_quality_)});
+   return UpdateResult::kKeyframe;
+ }
+ 
+--- a/svo/src/schur_vins.cpp
++++ b/svo/src/schur_vins.cpp
+@@ -789,6 +789,27 @@
+     AugmentState(frame_bundle);
+     RegisterPoints(frame_bundle);
+ 
++    // Observe the actual first stereo clone, metric landmarks and covariance
++    // ownership after their existing commits. No estimator value is changed.
++    if(stereo && states_map.size()==1) {
++      const auto& clone=states_map.rbegin()->second;
++      const double baseline=(T_imu_cam1.getPosition()-T_imu_cam0.getPosition()).norm();
++      rm27::event("stereo_filter_state_commit",frame_bundle,{
++        curr_state->ts,double(epoch_),double(curr_state->id),double(states_map.size()),
++        double(cov.rows()),double(cov.cols()),double(clone->features.size()),double(local_pts.size()),
++        frame_bundle->imu_ready_?1.0:0.0,
++        curr_state->quat.w(),curr_state->quat.x(),curr_state->quat.y(),curr_state->quat.z(),
++        curr_state->pos.x(),curr_state->pos.y(),curr_state->pos.z(),
++        curr_state->vel.x(),curr_state->vel.y(),curr_state->vel.z(),
++        curr_state->ba.x(),curr_state->ba.y(),curr_state->ba.z(),
++        curr_state->bg.x(),curr_state->bg.y(),curr_state->bg.z(),
++        gravity.x(),gravity.y(),gravity.z(),
++        clone->quat_fej.w(),clone->quat_fej.x(),clone->quat_fej.y(),clone->quat_fej.z(),
++        clone->pos_fej.x(),clone->pos_fej.y(),clone->pos_fej.z(),
++        curr_state->vel_fej.x(),curr_state->vel_fej.y(),curr_state->vel_fej.z(),
++        baseline,cov.allFinite()?1.0:0.0});
++    }
++
+     const auto observe_current=[&](const char* kind) {
+       int registered=0,mature=0,inliers=0,nonfinite=0;double sum=0,maximum=0;
+       for(const auto& frame:frame_bundle->frames_)for(size_t i=0;i<frame->numFeatures();++i) {

@@ -1,0 +1,209 @@
+--- a/svo/include/svo/rm27_tracking_quality.h
++++ b/svo/include/svo/rm27_tracking_quality.h
+@@ -0,0 +1,35 @@
++#pragma once
++#include <cstddef>
++
++namespace rm27 {
++// Only Schur's actually accepted visual inliers enter this history. Public
++// num_matches includes seeds and remains an independent frontend statistic.
++struct TrackingQualityDecision {
++  std::size_t observations, previous_observations, minimum, maximum_drop;
++  bool has_previous, last_was_keyframe, visual_correction, compare_previous;
++  bool minimum_failed, drop_failed, good;
++};
++
++class SchurInlierQualityHistory {
++ public:
++  TrackingQualityDecision decide(std::size_t observations, std::size_t minimum,
++      std::size_t maximum_drop, bool last_was_keyframe,
++      bool visual_correction, bool compare_previous = true) {
++    TrackingQualityDecision result{observations, previous_, minimum, maximum_drop,
++        available_, last_was_keyframe, visual_correction, compare_previous,
++        observations < minimum, false, false};
++    result.drop_failed = compare_previous && available_ && !last_was_keyframe
++        && previous_ > observations && previous_ - observations > maximum_drop;
++    result.good = visual_correction && !result.minimum_failed && !result.drop_failed;
++    // No correction breaks consecutive evidence. Bootstrap populations and
++    // missing visual updates cannot silently seed a later inlier comparison.
++    available_ = visual_correction;
++    previous_ = visual_correction ? observations : 0;
++    return result;
++  }
++  void reset() { previous_ = 0; available_ = false; }
++ private:
++  std::size_t previous_ = 0;
++  bool available_ = false;
++};
++}  // namespace rm27
+--- a/svo/include/svo/frame_handler_base.h
++++ b/svo/include/svo/frame_handler_base.h
+@@ -26,6 +26,7 @@
+ #include "svo/common/frame.h"
+ #include "svo/map.h"
+ #include "svo/global.h"
++#include "svo/rm27_tracking_quality.h"
+ 
+ // forward declarations:
+ namespace vk
+@@ -439,6 +440,7 @@
+   vk::RingBuffer<double> acc_frame_timings_;    //!< Total processing time of the last 10 frames, used to give some user feedback on the performance.
+   vk::RingBuffer<size_t> acc_num_obs_;          //!< Number of observed features of the last 10 frames, used to give some user feedback on the tracking performance.
+   size_t num_obs_last_;                         //!< Number of observations in the previous frame.
++  rm27::SchurInlierQualityHistory schur_quality_history_;
+   TrackingQuality tracking_quality_;            //!< An estimate of the tracking quality based on the number of tracked features.
+   UpdateResult update_res_;                     //!< Update result of last frame bundle
+   size_t frame_counter_ = 0; //!< Number of frames processed since started
+@@ -511,6 +513,10 @@
+   /// Set the tracking quality based on the number of tracked features.
+   virtual void setTrackingQuality(const size_t num_observations);
+ 
++  // Population is Schur inliers, never frontend seeds or map matches.
++  void setSchurTrackingQuality(size_t num_inliers, bool visual_correction,
++                               bool compare_previous = true);
++
+   /// Set all cells in detector to occupied in which a point reprojected during
+   /// the reprojection stage.
+   virtual void setDetectorOccupiedCells(
+--- a/svo/src/frame_handler_base.cpp
++++ b/svo/src/frame_handler_base.cpp
+@@ -1057,6 +1057,7 @@
+   set_reset_ = false;
+   set_start_ = false;
+   num_obs_last_ = 0;
++  schur_quality_history_.reset();
+   reloc_keyframe_.reset();
+   relocalization_n_trials_ = 0;
+   t_lastimu_newimu_ = Vector3d::Zero();
+@@ -1117,6 +1118,25 @@
+     global_map_->setEnableReobserved(!recovery);
+   }
+ #endif
++}
++
++//------------------------------------------------------------------------------
++void FrameHandlerBase::setSchurTrackingQuality(
++    size_t num_inliers, bool visual_correction, bool compare_previous)
++{
++  const auto decision = schur_quality_history_.decide(num_inliers,
++      options_.quality_min_fts, options_.quality_max_fts_drop,
++      last_frames_ && last_frames_->isKeyframe(), visual_correction, compare_previous);
++  tracking_quality_ = decision.good ? TrackingQuality::kGood : TrackingQuality::kInsufficient;
++  // One explicit decision per processed bundle; population=2 means Schur
++  // inliers. visual_correction=0 explicitly identifies unavailable evidence.
++  rm27::event("quality_decision", new_frames_, {
++      double(decision.observations), double(decision.previous_observations),
++      double(decision.minimum), double(decision.maximum_drop),
++      double(decision.has_previous), double(decision.last_was_keyframe),
++      double(decision.visual_correction), 2.0,
++      double(decision.minimum_failed), double(decision.drop_failed),
++      double(tracking_quality_), double(decision.compare_previous)});
+ }
+ 
+ //------------------------------------------------------------------------------
+--- a/svo/src/frame_handler_mono.cpp
++++ b/svo/src/frame_handler_mono.cpp
+@@ -148,7 +148,7 @@
+   mono_alignment_.add(new_frames_);
+   if(!mono_alignment_.poses.empty()) { const auto& p=mono_alignment_.poses.back();
+     rm27::event("mono_bootstrap_pose",new_frames_,{p.q.w(),p.q.x(),p.q.y(),p.q.z(),p.camera.x(),p.camera.y(),p.camera.z()}); }
+-  tracking_quality_ = TrackingQuality::kGood;
++  setSchurTrackingQuality(0, false);
+   initializer_->reset();
+   VLOG(1) << "Init: Selected second frame, triangulated initial map.";
+   return UpdateResult::kKeyframe;
+@@ -174,6 +174,7 @@
+   n_total_observations = projectMapInFrame();
+   if(n_total_observations < options_.quality_min_fts)
+   {
++    setSchurTrackingQuality(0, false);
+     LOG(WARNING) << "Not enough feature after reprojection: "
+                  << n_total_observations;
+     return UpdateResult::kFailure;
+@@ -186,6 +187,11 @@
+     VLOG(40) << "===== Pose Optimization =====";
+     const size_t reprojected_observations=n_total_observations;
+     n_total_observations = optimizePose();
++    // Bootstrap VO and clone warmup do not constitute accepted visual filter
++    // corrections. Keep initialization running under its original gates.
++    setSchurTrackingQuality(n_total_observations,
++        schur_vins_->MetricReady() && schur_vins_->LastVisualCorrectionAccepted(),
++        stage_ != Stage::kInitializing);
+     if(schur_vins_->MonoClonesPending())
+     {
+       // The frontend just matched these features in the actual image. With
+@@ -218,16 +224,13 @@
+     }
+   }
+ 
+-  // return if tracking bad
+-  if(stage_==Stage::kInitializing && schur_vins_->MetricReady()) {
+-    // No previous qualified metric frame exists for a feature-drop comparison.
+-    // Keep the original absolute inlier gate; do not compare this count with
+-    // the preceding arbitrary-scale frontend's different feature population.
+-    tracking_quality_=n_total_observations>=options_.quality_min_fts
+-        ? TrackingQuality::kGood : TrackingQuality::kInsufficient;
+-  } else {
+-    setTrackingQuality(n_total_observations);
+-  }
++  else
++  {
++    setSchurTrackingQuality(0, false);
++  }
++  // Quality was refreshed using only this frame's accepted Schur inliers.
++  // The initializing stage retains its original absolute-inlier gates and
++  // does not use premetric frontend populations for feature-drop comparisons.
+   if(tracking_quality_ == TrackingQuality::kInsufficient && stage_!=Stage::kInitializing)
+     return UpdateResult::kFailure;
+ 
+--- a/svo/src/frame_handler_stereo.cpp
++++ b/svo/src/frame_handler_stereo.cpp
+@@ -11,6 +11,7 @@
+ // (All authors of SchurVINS are with PICO department of ByteDance Corporation)
+ 
+ #include <svo/frame_handler_stereo.h>
++#include <svo/schur_vins.h>
+ #include <svo/rm27_diagnostics.h>
+ #include <svo/map.h>
+ #include <svo/common/frame.h>
+@@ -105,7 +106,7 @@
+ 
+   SVO_INFO_STREAM("Init: Selected first frame.");
+   stage_ = Stage::kTracking;
+-  tracking_quality_ = TrackingQuality::kGood;
++  setSchurTrackingQuality(0, false);
+   // This records completed stereo bootstrap, not a visual filter correction.
+   // The first Backward can legitimately bypass Solve3 with one cloned state.
+   rm27::event("stereo_metric_initialized",new_frames_,{
+@@ -128,6 +129,7 @@
+   n_tracked_features = projectMapInFrame();
+   if(n_tracked_features < options_.quality_min_fts)
+   {
++    setSchurTrackingQuality(0, false);
+     return makeKeyframe(); // force stereo triangulation to recover
+   }
+ 
+@@ -135,14 +137,21 @@
+   if(bundle_adjustment_type_!=BundleAdjustmentType::kCeres)
+   {
+     n_tracked_features = optimizePose();
++    // Refresh before either early keyframe return. A previous Good state is
++    // never reused when the current filter has fewer than the original minimum.
++    setSchurTrackingQuality(n_tracked_features,
++        schur_vins_->LastVisualCorrectionAccepted());
+     if(n_tracked_features < options_.quality_min_fts)
+     {
+       return makeKeyframe(); // force stereo triangulation to recover
+     }
+     optimizeStructure(new_frames_, options_.structure_optimization_max_pts, 5);
+   }
+-  // return if tracking bad
+-  setTrackingQuality(n_tracked_features);
++  else
++  {
++    setSchurTrackingQuality(0, false);
++  }
++  // return if tracking bad; quality already describes this filter update.
+   if(tracking_quality_ == TrackingQuality::kInsufficient)
+   {
+     return makeKeyframe(); // force stereo triangulation to recover

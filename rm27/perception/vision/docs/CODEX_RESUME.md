@@ -1,5 +1,13 @@
 # RM27 VIO resume — 2026-10-13
 
+## Current candidate work
+
+SchurVINS is now authorized as the first RK3576 VIO candidate; OpenVINS
+remains the preserved comparison baseline. Use the independent SchurVINS
+entry and [integration record](../../../../.agents/docs/SCHURVINS_INTEGRATION.md).
+Historical PX4/M3C logging failures do not block the new independent IMU.
+The older scope and evidence below remain specific to those experiments.
+
 ## Scope
 
 Work only on VIO in main. Historical monocular SLAM code/reports are archived

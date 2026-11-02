@@ -1,0 +1,60 @@
+--- a/svo/include/svo/rm27_input_health.h
++++ b/svo/include/svo/rm27_input_health.h
+@@ -9,7 +9,7 @@
+ constexpr int64_t schur_max_imu_gap_ns=15000000;
+ constexpr double schur_max_imu_gap_s=.015;
+ enum class InputFault { None=0, CameraTimestamp=1, CameraOrder=2,
+-    ImuNonfinite=3, ImuOrder=4, ImuGap=5, ImuCoverage=6 };
++    ImuNonfinite=3, ImuOrder=4, ImuGap=5, ImuCoverage=6, CameraNativeResolution=7 };
+ inline const char* inputFaultName(InputFault fault) {
+     switch(fault) {
+       case InputFault::CameraTimestamp:return "input_rejected_camera_timestamp";
+@@ -18,6 +18,7 @@
+       case InputFault::ImuOrder:return "input_invalid_imu_order";
+       case InputFault::ImuGap:return "input_invalid_imu_gap";
+       case InputFault::ImuCoverage:return "input_invalid_imu_coverage";
++      case InputFault::CameraNativeResolution:return "input_rejected_camera_native_resolution";
+       default:return "input_healthy";
+     }
+ }
+@@ -30,6 +31,12 @@
+       latest=timestamp;return InputFault::None;
+     }
+ };
++// The native integration boundary uses epoch seconds as double. Some distinct
++// integer nanoseconds map to the same value; reject rather than retimestamp.
++inline InputFault cameraNativeTimeHealth(double end,double previous_frame) {
++    return !std::isfinite(end) || !std::isfinite(previous_frame) || end<=previous_frame
++        ?InputFault::CameraNativeResolution:InputFault::None;
++}
+ class ImuInputOrder {
+  public:
+     int64_t latest=-1;
+--- a/svo_ros/src/svo_interface.cpp
++++ b/svo_ros/src/svo_interface.cpp
+@@ -315,6 +315,17 @@
+         {double(static_cast<int>(camera_health)),automatic_reinitialization_?1.0:0.0});
+     return false;
+   }
++  const double end=timestamp_nanoseconds*common::conversions::kNanoSecondsToSeconds;
++  if(svo_->getLastFrames()) {
++    const auto health=rm27::cameraNativeTimeHealth(end,svo_->getLastFrames()->getMinTimestampSeconds());
++    if(health!=rm27::InputFault::None) {
++      // Reject before setImuPrior/getMeasurements's strictly increasing bound.
++      // Raw integer sensor time is retained in the event and never adjusted.
++      rm27::eventAtTimestamp(rm27::inputFaultName(health),timestamp_nanoseconds,-1,
++          {double(static_cast<int>(health)),automatic_reinitialization_?1.0:0.0});
++      return false;
++    }
++  }
+   if(input_failure_paused_) {
+     visualizer_->publishSvoInfo(svo_.get(),timestamp_nanoseconds);return false;
+   }
+@@ -327,7 +338,6 @@
+   if(pending!=rm27::InputFault::None) {
+     rejectImuInput(pending,timestamp_nanoseconds,pending_ns);return false;
+   }
+-  const double end=timestamp_nanoseconds*common::conversions::kNanoSecondsToSeconds;
+   const bool ready=imu_handler_->waitTill(end);
+   ImuMeasurements samples=imu_handler_->getMeasurementsCopy();
+   std::reverse(samples.begin(),samples.end()); // original storage is newest-first

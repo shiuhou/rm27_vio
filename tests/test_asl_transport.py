@@ -69,3 +69,50 @@ class TransportContract(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def test_comparison_stereo_order_and_exact_sync(tmp_path):
+    from tools.openvins.comparison_transport import events_from
+    with zipfile.ZipFile(tmp_path/'stereo.zip', 'w') as z:
+        for sensor in ['cam0', 'cam1']:
+            z.writestr('mav0/' + sensor + '/data.csv', '1403715273262142977,1403715273262142977.png\n')
+        z.writestr('mav0/imu0/data.csv', '1403715273262142977,1,2,3,4,5,6\n')
+    with zipfile.ZipFile(tmp_path/'stereo.zip') as z:
+        streams, events = events_from(z, 'stereo')
+    assert list(streams) == ['imu0', 'cam0', 'cam1']
+    assert [r[1] for r in events] == ['imu0', 'cam0', 'cam1']
+    assert all(r[0] == 1403715273262142977 for r in events)
+    with zipfile.ZipFile(tmp_path/'bad.zip', 'w') as z:
+        z.writestr('mav0/cam0/data.csv', '10,10.png\n')
+        z.writestr('mav0/cam1/data.csv', '11,11.png\n')
+        z.writestr('mav0/imu0/data.csv', '10,1,2,3,4,5,6\n')
+    import pytest
+    with zipfile.ZipFile(tmp_path/'bad.zip') as z, pytest.raises(ValueError, match='equal source timestamps'):
+        events_from(z, 'stereo')
+
+
+def test_comparison_actual_stereo_roundtrip(tmp_path):
+    import pytest
+    pytest.importorskip('rosbag2_py')
+    import cv2
+    import numpy as np
+    from tools.openvins.comparison_transport import build_bag
+    from rm27.perception.vision.localization.experiments.openvins_comparison import ComparisonDataset
+    ns = 1403715273262142977
+    archive = tmp_path/'synthetic.zip'
+    with zipfile.ZipFile(archive, 'w') as z:
+        for index, sensor in enumerate(['cam0', 'cam1']):
+            pixels = np.arange(12, dtype=np.uint8).reshape(3, 4) + index
+            ok, png = cv2.imencode('.png', pixels)
+            assert ok
+            z.writestr('mav0/' + sensor + '/data.csv', f'{ns},{ns}.png\n')
+            z.writestr('mav0/' + sensor + f'/data/{ns}.png', png.tobytes())
+        z.writestr('mav0/imu0/data.csv', f'{ns},.1,-.2,.3,4,5,6\n')
+        z.writestr('mav0/state_groundtruth_estimate0/data.csv', 'truth must stay outside bag')
+    result = build_bag(archive, tmp_path/'bag', 'stereo', 'SYNTHETIC_TEST')
+    assert result['verified_counts'] == {'imu0': 1, 'cam0': 1, 'cam1': 1}
+    data = ComparisonDataset(archive, tmp_path/'bag', 'SYNTHETIC_TEST', 'stereo', result['source_sha256'])
+    assert data.camera_ns == [ns] and data.imu_ns == [ns]
+    assert result['truth_included'] is False and result['readback_exact'] is True
+    with pytest.raises(FileExistsError):
+        build_bag(archive, tmp_path/'bag', 'stereo', 'SYNTHETIC_TEST')

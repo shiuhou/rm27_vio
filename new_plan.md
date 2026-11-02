@@ -5,7 +5,19 @@ SLAM line. The original mixed roadmap is retained on `legacy/slam` at74d44b0;
 this page is the active scope index, not a replacement of measured acceptance
 thresholds or a declaration that planned gates passed.
 
-## Active line
+## Authorized SchurVINS / RK3576 candidate work
+
+SchurVINS with its included SVO2.0 frontend is the first RK3576 VIO candidate;
+OpenVINS remains the comparison baseline. The independent SchurVINS runtime
+entry is validated before any general-runner integration. Current work is
+public-data PC reproduction/comparison plus ARM64 and UZH-FPV feasibility;
+no SLAM mapping, loop closure, hardware capture, firmware or flight.
+New independent IMU qualification does not depend on resolving historical
+MicoAir/PX4 logger failures. See the single
+[integration record](.agents/docs/SCHURVINS_INTEGRATION.md) for actual results
+and [tools](tools/schurvins/README.md) for executable commands.
+
+## Historical OpenVINS / PX4 line
 
 OS04A10 Camera + verified PX4 IMU -> evidence-preserving acquisition ->
 offline OpenVINS baseline -> existing LocalizationEstimate adapter.
@@ -13,8 +25,9 @@ The current priority is qualifying complete, correctly timed IMU input.
 
 Only OpenVINS is enabled in the main runner. No monocular SLAM launcher, map/
 loop-closure experiment or ORB-SLAM3/stella_vslam backend is developed here.
-Alternative VIO estimators, M3C estimator port, calibration, EKF fusion and flight
-remain separate future decisions, not authorization from this plan.
+SchurVINS is now separately authorized above. Physical calibration, EKF fusion
+and flight still require their own scope; historical M3C deployment is not
+the new platform qualification.
 
 ## Unchanged requirements
 

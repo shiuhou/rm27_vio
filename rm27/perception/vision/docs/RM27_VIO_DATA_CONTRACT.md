@@ -1,5 +1,15 @@
 # RM27 VIO data contract — preparation, 2026-10-07
 
+## Current platform direction
+
+RK3576 with independently selected IMU and front/down cameras is the new
+platform direction; sensor, shutter, clocks, synchronization, calibration and
+bring-up remain unqualified. SchurVINS is the first candidate and OpenVINS the
+comparison baseline. All timestamp/frame/scale/unknown-state contracts below
+apply to both. PX4/M3C-specific historical evidence is preserved below and is
+not a prerequisite for the new independent sensor path. See
+[SchurVINS integration](../../../../.agents/docs/SCHURVINS_INTEGRATION.md).
+
 Status updated 2026-10-08: raw-IMU validation/static analysis and OpenVINS runtime
 adapter are implemented. Same-run native/adapter conversion and SE3 metrics agree;
 native repeatability remains unresolved, so VIO-P stays PARTIAL. PX4 identity
