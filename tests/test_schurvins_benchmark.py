@@ -35,6 +35,32 @@ def test_actual_process_resources_and_artifact_provenance(tmp_path):
         run(output,command('pass'),rate=.5)
 
 
+@pytest.mark.parametrize('mutate', [False, True])
+def test_private_gnu_time_wrapper_preserves_resource_and_tool_identity(tmp_path, mutate):
+    wrapper = tmp_path/'private-time'
+    wrapper.write_text('#!/bin/sh\nexec /usr/bin/time "$@"\n')
+    wrapper.chmod(0o755)
+    code = 'import time; data=bytearray(8*1024*1024); time.sleep(.12)'
+    if mutate:
+        code += f'; from pathlib import Path; Path({str(wrapper)!r}).write_text("changed")'
+    result = run(tmp_path/'out', command(code), rate=.5, interval_s=.02, time_binary=wrapper)
+    assert result['exit_code'] == 0 and result['resources']['maximum_rss_kib'] > 0
+    assert result['time_binary'] == str(wrapper) and 'GNU' in result['time_version']
+    assert result['status'] == ('FAIL' if mutate else 'PASS')
+    assert result['failure'] == ('RESOURCE_TOOL_MUTATED' if mutate else None)
+    assert (result['time_binary_sha256'] == result['time_binary_after_sha256']) is (not mutate)
+
+
+def test_non_gnu_resource_tool_is_rejected_before_estimator_launch(tmp_path):
+    wrapper = tmp_path/'bsd-time'
+    wrapper.write_text('#!/bin/sh\nprintf "BSD time\\n"\n')
+    wrapper.chmod(0o755)
+    output = tmp_path/'out'
+    with pytest.raises(ValueError, match='GNU time'):
+        run(output, command('raise SystemExit(99)'), rate=.5, time_binary=wrapper)
+    assert not output.exists()
+
+
 def test_real_failure_and_timeout_preserve_exit_evidence(tmp_path):
     failure = run(tmp_path/'bad', command('raise SystemExit(7)'), rate=1.,interval_s=.02)
     assert failure['status'] == 'FAIL' and failure['exit_code'] == 7
@@ -92,7 +118,8 @@ def test_timeline_rejects_clock_rewind(tmp_path):
         timeline_summary(p)
 
 
-def test_cohort_retains_failed_member_and_refuses_mixed_arguments(tmp_path):
+@pytest.mark.parametrize('changed_field', ['command_template', 'time_binary_sha256'])
+def test_cohort_retains_failed_member_and_refuses_mixed_arguments(tmp_path, changed_field):
     reports=[]
     for i in range(2):
         p=tmp_path/str(i); p.mkdir()
@@ -102,7 +129,10 @@ def test_cohort_retains_failed_member_and_refuses_mixed_arguments(tmp_path):
         path=p/'benchmark.json';path.write_text(json.dumps(data));reports.append(path)
     cohort=repeat_summary(reports)
     assert cohort['status'] == 'FAIL' and cohort['passed'] == 1 and cohort['planned'] == 2
-    data['command_template'].append('--different')
+    if changed_field == 'command_template':
+        data['command_template'].append('--different')
+    else:
+        data['time_binary_sha256'] = 'different-resource-tool'
     reports[-1].write_text(json.dumps(data))
     with pytest.raises(ValueError,match='differs'):
         repeat_summary(reports)

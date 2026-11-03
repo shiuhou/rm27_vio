@@ -27,8 +27,14 @@ use `python3 -m tools.schurvins.benchmark --help`; invoke it beside the actual
 binary, never around an SSH or Docker client. `headless_evaluate` scores recorded
 poses after execution, retaining separate execution, numerical and operational
 gates. `python3 -m tools.schurvins.m3c --help` describes the read-only inventory
-collector; it is not a camera or UART opener. Current measured evidence is in the
-M3C section of the integration record.
+collector; it is not a camera or UART opener. Current target measurements and
+acceptance are maintained in the [deployment report](../../.agents/docs/M3C_DEPLOYMENT.md).
+
+The runbook includes a private ARM64 GNU time package and
+`benchmark run --time-binary /absolute/private/run` for systems lacking the tool.
+GNU identity and tool hashes are recorded; resource measurement remains separate
+from estimator execution. Native process tests require Linux, while portable
+analysis checks can run on the Mac laptop.
 
 ## Source and environment preparation
 

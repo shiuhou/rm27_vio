@@ -149,7 +149,8 @@ def artifact_hashes(paths):
     return frozen
 
 
-def run(output, command, *, rate, target='pc-native', timeout_s=900, interval_s=.1, artifacts=()):
+def run(output, command, *, rate, target='pc-native', timeout_s=900, interval_s=.1, artifacts=(),
+        time_binary='/usr/bin/time'):
     """Execute one owned native process group and seal measured resource evidence."""
     if rate not in (0.5, 1.0) or not math.isfinite(timeout_s) or timeout_s <= 0:
         raise ValueError('rate must be 0.5 or 1.0 and timeout positive')
@@ -162,9 +163,13 @@ def run(output, command, *, rate, target='pc-native', timeout_s=900, interval_s=
     binary = shutil.which(command[0])
     if not binary:
         raise ValueError('native command executable missing')
-    time_binary = Path('/usr/bin/time')
-    if not time_binary.is_file():
-        raise ValueError('GNU /usr/bin/time is required for authoritative process resources')
+    time_binary = Path(time_binary).resolve()
+    if not time_binary.is_file() or not os.access(time_binary, os.X_OK):
+        raise ValueError('executable GNU time is required; supply --time-binary for a private tool')
+    version = subprocess.run([str(time_binary), '--version'], capture_output=True, text=True, timeout=10)
+    if version.returncode != 0 or 'GNU' not in version.stdout + version.stderr:
+        raise ValueError('resource tool must identify itself as GNU time')
+    time_sha256 = file_hash(time_binary)
     frozen = artifact_hashes(artifacts)
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
@@ -174,7 +179,9 @@ def run(output, command, *, rate, target='pc-native', timeout_s=900, interval_s=
         estimator_acceptance='NOT_RUN', evidence_class=evidence_class, target=target, rate=rate,
         identity=identity, command=command, command_template=command_template, binary=str(Path(binary).resolve()), binary_sha256=file_hash(binary),
         artifacts_before_sha256=frozen, sampler_interval_s=interval_s, timeout_s=timeout_s,
-        sampler_sha256=file_hash(__file__))
+        sampler_sha256=file_hash(__file__),
+        time_binary=str(time_binary), time_binary_sha256=time_sha256,
+        time_version=version.stdout + version.stderr)
     write_json(output/'benchmark.json', manifest)
     samples = []
     started = time.monotonic_ns()
@@ -208,6 +215,9 @@ def run(output, command, *, rate, target='pc-native', timeout_s=900, interval_s=
     binary_after = file_hash(binary) if Path(binary).is_file() else None
     if binary_after != manifest['binary_sha256']:
         failure = 'EXECUTABLE_MUTATED'
+    time_after = file_hash(time_binary) if time_binary.is_file() else None
+    if time_after != time_sha256:
+        failure = 'RESOURCE_TOOL_MUTATED'
     if not cleanup['non_zombie_process_group_absence_verified']:
         failure = 'PROCESS_GROUP_CLEANUP_UNVERIFIED'
     resources = native_resources((output/'native-resource.txt').read_text()) if (output/'native-resource.txt').is_file() else dict(status='NOT_RUN')
@@ -226,7 +236,8 @@ def run(output, command, *, rate, target='pc-native', timeout_s=900, interval_s=
     code = process.returncode if process is not None else None
     manifest.update(status='PASS' if code == 0 and failure is None and resources['status'] == 'PASS' else 'FAIL',
         failure=failure, exit_code=code, elapsed_monotonic_s=elapsed_s, resources=resources, sampled_resources=sampled,
-        artifacts_after_sha256=after, binary_after_sha256=binary_after, cleanup=cleanup,
+        artifacts_after_sha256=after, binary_after_sha256=binary_after,
+        time_binary_after_sha256=time_after, cleanup=cleanup,
         evidence_sha256={str(p.relative_to(output)):file_hash(p) for p in output.rglob('*')
                          if p.is_file() and p != output/'benchmark.json'})
     write_json(output/'benchmark.json', manifest)
@@ -351,7 +362,8 @@ def repeat_summary(records):
     if not records:
         return dict(status='NOT_RUN', planned=0, passed=0)
     reports = [read_json(path) for path in records]
-    keys = ('rate', 'target', 'binary_sha256', 'artifacts_before_sha256', 'command_template')
+    keys = ('rate', 'target', 'binary_sha256', 'artifacts_before_sha256', 'command_template',
+            'time_binary_sha256', 'time_version')
     for path in records:
         summarize(benchmark=path)  # check original measured artifact membership and hashes
     expected = {key: reports[0].get(key) for key in keys}
@@ -381,6 +393,8 @@ def main(argv=None):
     launch.add_argument('--target', choices=('pc-native','m3c-native','qemu-reference'), default='pc-native')
     launch.add_argument('--timeout-s', type=float, default=900)
     launch.add_argument('--sample-interval-s', type=float, default=.1)
+    launch.add_argument('--time-binary', default='/usr/bin/time',
+                        help='GNU time executable or private wrapper on this execution machine')
     launch.add_argument('--artifact', action='append', default=[])
     launch.add_argument('command', nargs=argparse.REMAINDER)
     report = sub.add_parser('summarize')
@@ -394,7 +408,7 @@ def main(argv=None):
     if args.action == 'run':
         command = args.command[1:] if args.command and args.command[0] == '--' else args.command
         result = run(args.output, command, rate=args.rate, target=args.target, timeout_s=args.timeout_s,
-                     interval_s=args.sample_interval_s, artifacts=args.artifact)
+                     interval_s=args.sample_interval_s, artifacts=args.artifact, time_binary=args.time_binary)
     elif args.action == 'summarize':
         if Path(args.output).exists():
             raise ValueError('summary output already exists')

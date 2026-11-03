@@ -72,6 +72,34 @@ The compiled boundary regression tests use a JSON command argv supplied through
 `SCHURVINS_HEADLESS_TEST_COMMAND`. They test actual C++ input refusal, stereo
 pairing and immutable output behavior; absent that command they report a skip.
 
+The separate `../mono-initialization.patch` is an experimental derivative, still
+**FAIL** for full monocular replay. Preparation does not apply it. It contains
+the metric-bootstrap candidate and tested observation-history, ownership,
+joint-update, rejected-observation and frame-metadata repairs; it is not the distributed M3C binary. Apply it
+only to a fresh independently prepared copy of the pinned source. Native research
+regressions are explicitly enabled during configuration:
+
+```sh
+patch --dry-run --batch -p1 -d NEW_HEADLESS_ROOT/src/SchurVINS \
+  < REPO/tools/schurvins/mono-initialization.patch
+patch --batch -p1 -d NEW_HEADLESS_ROOT/src/SchurVINS \
+  < REPO/tools/schurvins/mono-initialization.patch
+cmake REPO/tools/schurvins/headless -DSCHUR_SOURCE=NEW_HEADLESS_ROOT/src \
+  -DSCHUR_DEP_LIB=TARGET_WS/devel/.private/opengv/lib \
+  -DSCHURVINS_TEST_SOURCE_DIR=REPO/tests/fixtures
+cmake --build . -- -j2
+ctest --output-on-failure
+```
+
+Use absolute paths from a new build directory as in the baseline example.
+The seven native cases execute alignment, quality, reset/destruction, window
+management, exactly-once camera/point updates, rejected-observation removal and
+frame-cache/explicit-bundle-ID behavior in the compiled core.
+These native tests are disabled by default and reject a source tree without the research
+initializer. Passing them does not establish continuous monocular tracking;
+full-sequence evidence and remaining failures are in the
+[deployment record](../../../.agents/docs/M3C_DEPLOYMENT.md).
+
 Output streams check open, write, flush and close failures. An unavailable/full
 filesystem causes a nonzero exit; a failure summary is best effort. The compiled
 regression forces a real EFBIG error before estimator startup. Existing measured
@@ -91,3 +119,9 @@ It validates summary/frame/pose parity and exact camera association before
 emitting existing `OnlinePoseRecord` observations. Native steady completion is
 preserved, publication/receipt time remains absent, mono scale stays UNKNOWN,
 and operational validity remains false. This is not a live MAVLink output source.
+
+For source restoration or a changed research patch, configure a new empty build
+directory. Copying files with preserved older mtimes into an incremental build
+can silently retain old objects; a replay source hash alone cannot prove the
+binary contains those source bytes. Final validation must bind a fresh build,
+its source/patch hashes, the executable hash and complete replay records.
