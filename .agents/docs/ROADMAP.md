@@ -1,0 +1,20 @@
+# RM27 VIO — ROADMAP
+
+| 節點 | 狀態與依賴 |
+|---|---|
+| 視覺組Git review（2026-11-26） | `codex/vision-team-review`收錄目前OpenVINS錄製／回放、headless來源／lock／patch及測試，歷史Schur材料維持USER_PAUSED；本次原碼發布不增加native／實機資格 |
+| 視覺組source review交付準備（2026-11-26） | **本機準備PASS／未發布**。README整理入口、來源／raw／native依賴與離線命令，補PyYAML依賴；實際使用的ROS-free headless adapter由歷史來源核對6份hash後匯入`tools/openvins/headless/`，保留上游GPLv3、commit/archive lock及3份檔案精確patch。獨立source-only copy：335 PASS／10 ROS bag依賴skip；prepared source的202份hash及獨立patch readback3份核對一致。未編譯／執行估測器、實機操作或恢復Schur；證據由parent `artifacts/vision-vio-source-review-20261126/receipt.json`保存。整體delivery／PLAN／publication由parent協調，無commit／push。 |
+| OS04A10地面VIO試驗準備（2026-11-25） | **準備文件完成／實機NOT_RUN**。使用者澄清只先做好準備；已列sensor／recorder／clock／校準依賴、慢／較快地面錄製、無執行預檢與無GT判讀，不新增門檻或修改算法。現有離線入口沿用；缺最終IMU／sensor／BSP與可信配對實拍資料，未採集或回放。見parent [試驗流程](../../../../docs/notes/openvins_camera_selection.md#os04a10-地面試驗準備)；獨立clone需同步parent筆記，不能當已具備硬體資格。 |
+| OpenVINS通用錄製離線入口（2026-11-24） | **本機入口／公共配對資料回放PASS，真實硬體待驗**。沿用既有ROS-free runner，新增sealed recording→有來源的calibration／IMU／clock設定→無GT診斷。PC完整2912影格／29120 IMU，2800 poses／2800 accepted visual-update frames，初始化前綴112幀、其後缺口0；未使用GT，不給ATE。相關335 tests PASS／10 ROS bag依賴skipped。原生回放23.769s、callback P95 10.435ms僅為本次PC unpaced範圍。保留shutter／時間／frame／實機精度未資格化，不替代RK3576 P2／P3或恢復Schur。見[入口與資料要求](../../tools/openvins/README.md#sealed-camera--imu-recording--offline-diagnostics)；本機證據`.agents/runs/openvins_recording/receipt.json`，parent artifacts/openvins-recording-v101-01/replay-01。 |
+| SchurVINS暫停（2026-11-24） | **USER_PAUSED**：使用者決定先擱置整條Schur工作，保留OpenVINS單目＋IMU基線；不再推進單目改造、官方雙目重現、第三方評估或實板測試。未來可能增加下視相機尚未定案，不建立雙目資格或自動恢復工作；原來源／失敗證據保留 |
+| 本地接口與歷史回放 | 合成資料交換與主機研究證據分開；見 [README](../../README.md) |
+| Schur上游支援核對（2026-11-24） | **網上查證完成；停止自行單目適配**。上游協作者明確表示原版只支援雙目；issues有多次單目失敗。第三方ov_SchurVINS是OpenVINS框架重作，未採用／未實測。先前mono修復提案不再是當前方向，原失敗與來源保留；見 [原文與界線](SCHURVINS_INTEGRATION.md#upstream-support-scope-2026-11-24) |
+| Schur單目有界修復（2026-11-24） | **嘗試完成／UNRESOLVED**：兩個候選各完整0.5×回放仍僅1pose；一致回代第一次恢復局部內點、第二次使5點落到相機後方。已撤除無效正式patch與專屬測試，最終30 tests PASS。新證據把下一設計邊界定位到mono初始化→短filter視窗／地標先驗與map一致性；尚非唯一根因。未擴跑1×／repeats或更新RK3576候選。見 [結果與限制](SCHURVINS_INTEGRATION.md#bounded-monocular-repair-attempt-2026-11-24) |
+| Camera＋IMU 資料鏈 | VIO-P／S0 歷史判定 PARTIAL。時鐘、遺失樣本及校準按 [資料契約](../../rm27/perception/vision/docs/RM27_VIO_DATA_CONTRACT.md) 各自判定 |
+| 單目雙後端比較準備（2026-11-23） | **PREPARED_NOT_RUN**：V1_01完整2912影格／29120 IMU的同來源、同校準、同速率配對，0.5×及1×各12份未執行設定；101項準備／既有矩陣測試PASS。見 [比較協議](../../rm27/perception/vision/docs/MONO_VIO_COMPARISON.md) 及 [本機收據](../runs/mono_comparison_preparation/receipt.json)。未啟動估測器，原75-gate／67-cohort及1cm門檻未改；實拍配對仍缺OpenVINS通用recording／calibration／clock接入與generic locks |
+| 首次單目配對回放（2026-11-23） | **有界執行完成；配對精度／性能比較BLOCKED**。原4smokes FAIL、20repeats NOT_RUN：Schur 0／1 pose不可評分；Open host未載ROS而分析失敗。補載既有Jazzy後獨立2次Open確認PASS，各2800／2912 poses、SE3 ATE0.070115m；不替代原失敗或取得repeatability資格。6次回放／264封存artifacts、24configs／9受保護來源核對PASS。見 [比較結果](../runs/mono_comparison_execution/comparison.json)；下一項先查Schur發佈／事件階段，非實板或算法排名 |
+| Schur state→pose資料流診斷（2026-11-23） | **流向已定位、算法仍FAIL**：half當前inliers1–25<40，全長Initializing；1× source154為49而發唯一pose、下一幀0後Relocalization→reset→Paused。native文字軌跡與ROS皆0／1。修summary不同phase quality誤配，兩份sealed摘要成功但保留原失敗；相關569 tests PASS。更新後殘差惡化的數學根因與1× source152未入native之邊界未明；未重跑或調參。見 [診斷](SCHURVINS_INTEGRATION.md#monocular-state-to-pose-diagnosis-2026-11-23) |
+| RK3576 真實 VIO | 固定資料與板端回放證據不能替代實拍 IMU 同步、精度、持續性和負載測量；由對應工作驗收 |
+| SchurVINS RK3576 原生診斷準備（2026-11-23） | **PREPARED_NOT_RUN**：保留Bionic/Melodic完整userspace，將既有ARM64 base＋input-boundaries overlay整理成native Docker候選；完整來源／devel／rootfs與238庫雜湊核對，無真值mono輸入。獨立doctor／限時raw回放重用inner transport，按約4GB板記錄選2560MiB診斷cap；未建板端image、連線或執行。PC mono 0／1pose失敗不變，與原matrix／OpenVINS基線分開。見 [命令與邊界](../../tools/schurvins/README.md#rk3576-native-diagnostic-candidate)；實際候選及針對性驗證見 [本機收據](../runs/rk3576_schur_preparation/receipt.json) |
+
+[需求與驗收](SPEC.md)｜[設計](DESIGN.md)。研究候選與過往負結果按來源保留。

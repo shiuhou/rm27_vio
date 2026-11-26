@@ -1,5 +1,11 @@
 # SchurVINS candidate: PC reproduction and RK3576 preparation
 
+**USER_PAUSED — November 24, 2026.** The user has deferred SchurVINS work,
+including stereo reproduction, third-party evaluation and board testing. OpenVINS
+remains the current mono+IMU baseline. A possible future downward-facing camera
+is unconfirmed and does not establish stereo suitability or resume this work.
+Prior source, failures and evidence below remain available for reference.
+
 SchurVINS is an authorized VIO candidate for RK3576; OpenVINS remains the
 comparison baseline. This work does not qualify a camera/IMU assembly, RK3576
 runtime, estimator/controller integration or flight. The existing OpenVINS
@@ -13,6 +19,277 @@ below. Reliable continuous Schur mono tracking, complete required cohorts and
 operational health/recovery remain software acceptance gaps. RK3576 BSP/ABI,
 physical sensor timing/calibration and onboard performance are separately
 HARDWARE BLOCKED / NOT_RUN; this work is not yet at an only-hardware-remains stage.
+
+## Upstream support scope (2026-11-24)
+
+**Online support check complete; no further RM27 monocular adaptation.** The
+user explicitly requested checking upstream support and other monocular users
+before proceeding, and instructed us not to convert SchurVINS to monocular.
+The earlier proposed mono handoff redesign is therefore not the current work
+direction. Existing source, configurations, failed runs and reproduction paths
+remain research evidence, not official monocular support.
+
+The upstream GitHub collaborator `frank-fyf` answered on April 10, 2024:
+“**The original SchurVINS code only can work on stereo mode.**” He explains
+that switching to monocular YAML without changing code may cause unexpected
+issues because the original code was developed for stereo.
+[Issue 1 reply](https://github.com/bytedance/SchurVINS/issues/1#issuecomment-2046387046).
+On April 23, he reiterated: “**不改动代码的情况下，是不支持单目运行的。**”
+[Issue 7 reply](https://github.com/bytedance/SchurVINS/issues/7#issuecomment-2071418636).
+This establishes the original implementation's scope; it does not prove that
+the mathematical approach could never be implemented for monocular VIO.
+
+The live [README](https://github.com/bytedance/SchurVINS#4-run) demonstrates
+`euroc_vio_stereo.launch`. Paper [Table 1](https://arxiv.org/html/2312.01616v1#S3.T1)
+marks SchurVINS as `S`, with the footnote defining stereo versus monocular.
+The current `master` commit fetched online is still the pinned
+`d8ab6dff20860694d8d879d716d7fd6cb2c2530e` (January 17, 2025). The inherited
+mono launch/configuration files do not override the explicit upstream replies.
+
+Other users did try monocular operation. [Issue 7](https://github.com/bytedance/SchurVINS/issues/7)
+reports MH_01_easy initialization/reset and insufficient-feature failures, even
+after disabling the timing assertion, while stereo did not show those errors.
+[Issue 24](https://github.com/bytedance/SchurVINS/issues/24), March 2025, likewise
+reports working stereo and repeatedly resetting monocular depth estimation;
+its follow-up did not report a successful fix. Closed issues do not establish
+that mono was repaired. The inspected public issues/comments contain no
+verified successful original-code monocular reproduction.
+
+There is a third-party alternative: `Jas0nG` [linked](https://github.com/bytedance/SchurVINS/issues/26#issuecomment-3043253304)
+[ov_SchurVINS](https://github.com/Jas0nG/ov_SchurVINS) in July 2025 as a
+monocular implementation under OpenVINS. Its [pinned README](https://github.com/Jas0nG/ov_SchurVINS/blob/d988139c0ba3cc51abacb8b5b5acb482a19325ba/ReadMe.md)
+describes a reimplementation,
+with no EKF landmark solver and no online calibration. It is a different
+implementation with its own limitations, not a supported mono mode of the
+original SVO-backed repository. Its updater rejects FEJ and online calibration
+while its default EuRoC config enables those options; a repository/default config
+alone therefore does not establish a ready mono replay. No build, performance reproduction, adoption
+or integration of that project was performed or authorized by this lookup.
+
+This task fetched the official README/paper, 33 upstream issue/PR records and
+45 issue comments through public web APIs. Issue metadata declares 46 comments;
+issue 31 reports two while both comment endpoints return one. This count
+discrepancy is preserved in the receipt and does not affect the quoted replies. Local evidence is in the existing
+`.agents/runs/schurvins_mono_repair/online-*.json`, `online-official-readme.md`
+and `online-paper.html`; `online-support-receipt.json` indexes URLs and hashes.
+This is an online source review, not a new estimator experiment. Search-engine
+access and GitHub rate limits prevent an exhaustive claim about all other
+implementations. It corrects
+the earlier insufficient inference from the presence of a mono entry point.
+
+## Monocular state-to-pose diagnosis (2026-11-23)
+
+Diagnosis started on November 23 and finalized on November 24 (Asia/Shanghai).
+Read-only reconstruction of the original V1_01 mono smokes identifies the
+publication boundary: **the native frontend does not sustain Tracking**.
+This result applies to the frozen RM27 derivative, installation SHA256
+`41f447c8b35dee16814e137b0178aa738c5ff2b0ef101532ea2da211ac032e20`,
+binary `600943c1c99b2d52212e04e821021e6b03f3301dbe6d58639222b1d2fdc92840`.
+It is not an algorithm ranking or an RK3576 measurement. No estimator was
+executed during this diagnosis.
+
+The source path is `SvoInterface::monoCallback → processImageBundle →
+FrameHandlerMono::processFrameBundle/processFrame → publishResults →
+Visualizer::publishImuPose`. Metric initialization keeps `kInitializing`.
+An accepted Schur window correction with at least one current valid feature
+and finite state is weaker than frontend Good quality: the latter needs at
+least **40 current Schur inliers**, plus the applicable feature-drop check.
+Only a subsequent accepted correction with Good quality promotes mono to
+Tracking. `publishResults` emits Info for every reached stage but calls the
+pose publisher only at Tracking. The publisher writes both ROS pose and
+`logs/imu_traj.txt`; their counts agree exactly.
+
+Frozen source navigation (relative to the external
+`ws-input-boundaries/src/SchurVINS/` tree; verified identities are in
+`source-trace.json`):
+
+| Boundary | Source location | Effect |
+|---|---|---|
+| Camera callback → frontend | `svo_ros/src/svo_interface.cpp:409`, `:152` | Input/IMU checks, `addImageBundle`, then publication |
+| Metric initialization | `svo/src/frame_handler_mono.cpp:354` | Commits metric state, explicitly keeps Initializing; quality may become Good |
+| Correction acceptance | `svo/src/schur_vins.cpp:871` | Requires constraints, positive current inliers and finite state; not the 40-inlier quality test |
+| Current inliers → quality | `svo/src/frame_handler_mono.cpp:189`, `svo/include/svo/rm27_tracking_quality.h:15` | Applies configured minimum and feature-drop history |
+| Mono promotion to Tracking | `svo/src/frame_handler_mono.cpp:43` | Requires metric readiness, accepted correction and Good quality |
+| Failure → relocation/reset | `svo/src/frame_handler_base.cpp:574`, `:1075` | Exhausted relocation trials reset frontend to Paused |
+| Final Info / pose gate | `svo_ros/src/svo_interface.cpp:185` | Publishes Info first; pose only if final stage is Tracking |
+| ROS / text pose output | `svo_ros/src/visualizer.cpp:258` | Same publisher writes both; subscriber early return is commented out |
+
+The **40** minimum belongs to this frozen mono configuration
+(`svo_ros/param/frontend_imu/euroc_mono_imu.yaml:10`); the C++ default is 50.
+It is not a universal SchurVINS algorithm constant.
+
+| Original smoke | Verified state path | Native text / ROS poses |
+|---|---|---|
+| 0.5× | All 2,912 Info samples remain Initializing. Its 191 accepted corrections have only 1–25 current inliers; none reaches the 40 minimum. No tracking-ready event. | 0 / 0 |
+| 1× | Source camera 154 has 49 inliers and enters Tracking. Camera 155 has 0; failure enters Relocalization. Five unsuccessful relocation attempts reset to Paused; 2,752 Info samples are paused because automatic reinitialization is disabled. | 1 / 1 |
+
+Camera indices above are zero-based positions in the original source ledger,
+not native bundle IDs. The 1× frontend misses source camera 152 and processes
+160 bundles through camera 160, so subsequent native bundle IDs differ.
+The publisher/observer contains all 2,912 cameras and 29,120 IMU samples;
+the missing native callback boundary and complete native IMU ingestion remain
+unproven. `Info.num_matches` counts frontend features/landmarks and cannot
+substitute for current accepted Schur inliers. Clean process exits and no
+recorded OOM do not establish healthy estimation or exclude timing effects.
+
+Current-image residual telemetry narrows the next numerical investigation:
+at 0.5× camera 156, the current-frame ≤4 px inliers change 79→25 and mean
+residual 0.9387→4.5801 px across `Solve3` and state writeback, before outlier
+removal. At 1× camera 155 they change 37→0 and 4.1273→11.2542 px.
+The mathematical cause of this deterioration is **not established**. No
+threshold was relaxed, propagation published as tracking, or native state fixed.
+
+The independent summary exception was a processing-phase association bug:
+an intermediate `quality_decision=0` precedes metric initialization and later
+Info `quality=2, stage=1` in the same source/bundle. `summarize.py` now retains
+the two observations separately and records exact differences in
+`native_info.quality_decision_phase_comparison`. Source identity, ambiguity and
+decision-arithmetic checks remain. Both actual sealed summaries now succeed,
+each with one phase difference, while retaining the original FAILED codes and
+0/1 poses; stage 1/quality 2 remains NOT_GOOD. This fixes reporting only.
+
+Affected projection/native-event/runtime checks: **569 passed, 2.15 s**.
+New diagnosis evidence is at `.agents/runs/schurvins_pose_flow/` (`flow.json`,
+`source-trace.json`, `summaries.json`, `tests.xml`, `receipt.json`); old native
+raw/manifests, original matrix/gates, stopped research and the RK3576 candidate
+remain unchanged. These local ignored files are not bundled in clones. The
+next decision is a separately scoped numerical update investigation, with the
+existing source population, calibration, factors and thresholds preserved.
+
+### Causal assessment and proposed resolution (2026-11-24)
+
+The half-rate raw stream also shows severe internal-state growth: its last of
+191 `schur_visual_correction` events (ordinal/line 7538, source camera 650,
+bundle 650, sensor ns `1403715305762142976`) contains position norm
+691.2084 m and speed 113.7925 m/s in the same event. Quality event 7540 has
+one current inlier / quality 0, so this state was not published as Tracking.
+The accepted-correction flag is not evidence of a healthy estimate. These are
+internal magnitudes, not ground-truth trajectory error measurements.
+
+A follow-up static comparison with the locally pinned upstream source confirms
+that `Backward` writes corrected camera poses and culls observations before
+`StructureOptimize` calls `Point::EkfUpdate` for landmarks. The recorded residual
+rise is therefore a **pose correction against not-yet-corrected landmarks**,
+not a measurement of the final joint nonlinear objective. In Tracking, the
+insufficient-inlier return can prevent that later landmark correction entirely.
+This order is inherited upstream; its interaction with the added monocular
+bootstrap is a candidate cause, not an established new patch defect.
+
+The leading hypotheses are inconsistent phase ordering at culling, weak mono
+depth geometry entering unchecked point-Hessian inversion, and the new
+initialization's manually assigned diagonal covariance without qualified joint
+state/landmark uncertainty. Static review found no obvious camera/body sign or
+attitude-Jacobian convention defect. It did not prove those invariants correct.
+The historical near-upstream mono baseline also failed; returning to it cannot
+be assumed to repair mono. These historical results are not a new controlled
+ablation of the frozen derivative.
+
+The proposed next step is a bounded capture of the first failing update,
+retaining complete state/landmark/covariance and exact factor identities. Compare
+the same observations before correction, after pose correction and after the
+complete landmark correction; inspect geometric conditioning, solve residuals
+and increments. Metric-map conversion should separately preserve reprojections.
+Existing incomplete historical state snapshots cannot substitute for this
+capture. Only the identified mechanism should then be repaired: phase/commit
+ordering, numerical rank handling or initialization/handoff consistency as
+indicated by the evidence. The 40-inlier gate and original failed runs remain.
+Full-sequence and repeated validation follows a demonstrated local repair.
+This is a proposal only: no new estimator execution, numerical experiment,
+algorithm patch or stopped-research resumption was performed for this assessment.
+
+## Bounded monocular repair attempt (2026-11-24)
+
+**COMPLETE_ATTEMPT / UNRESOLVED.** The user's subsequent request to try a
+repair authorized isolated PC builds and recorded-input replay. Two correction
+candidates compiled but neither sustained Tracking. Their ineffective production
+patch and dedicated helper-test additions were withdrawn; the existing runtime,
+thresholds, frozen installations and RK3576 candidate retain their identities.
+This is not a completed mono repair or a resumption of the whole stopped study.
+
+All new executions were headless x86_64 EuRoC V1_01 cam0+imu0, using the same
+complete 2,912-image / 29,120-IMU source and calibration, scale/quality gates,
+Docker image `b4a9eb291ae6c65fd80d2841bb225c5bf86658f6c0a58cdca710ce1265cfc34a`,
+4 CPU / 12 GiB and no network. They used isolated derivatives of the frozen
+eight-patch PC installation, plus bounded observation instrumentation. Different
+initialization frames across runs preclude treating them as a deterministic
+same-state ablation or a repeatability cohort. Ground truth stayed outside the
+estimator. These runs do not replace the original failed smokes.
+
+| New run | Change and observed outcome |
+|---|---|
+| `diagnostic-short` | Observation-only capture; deliberate 60 s timeout, native exit −9 / execution failure. The 16 MiB cap allowed three complete five-phase solves before truncation, not eight complete solves. No trajectory qualification. |
+| `joint-half` | Move the existing point EKF before both culls and prevent a second point update. Full 0.5× replay, 301.989 s, one pose; FAILED / TRAJECTORY_NOT_EVALUABLE. All four processes exit 0 and owned container absence verified. |
+| `conditional-half` | Recover points from the exact cached Schur system before culling, without the independent point-EKF prior. Full 0.5× replay, 302.076 s, one pose at source 161; FAILED / TRAJECTORY_NOT_EVALUABLE. All four processes exit 0, no recorded OOM, owned container absence verified. |
+
+The second candidate computes `dp = Vinv * (gv - sum(W.transpose() * dx_clone))`.
+It marks the independent point covariance unavailable rather than fabricating a
+marginal posterior. Its first two complete, nontruncated snapshots establish:
+
+| Same selected current observations | Before solve | After pose writeback | After matching point recovery |
+|---|---|---|---|
+| Source 161, 90 observations | 86 inliers; mean 1.43122 px | 3; 7.66494 px | 87; 1.12133 px |
+| Source 162, 88 observations | 82 inliers; mean 1.34031 px | 0; 23.42105 px | 3; 58.60344 px; 5 points behind camera |
+
+Inliers in this table use the existing 4 px current-observation threshold on a
+fixed selected population; they are not interchangeable with all frontend
+features or its final quality count. The actual first/second point positions
+match independently reconstructed recovery to 1.76e−13 / 1.92e−12 m. Thus the
+second collapse occurs in the paired state/point update itself, including
+selected points; it cannot be explained solely by skipping other landmarks.
+First-solve point increments are 1.137–2.352 m (median 1.562 m), versus a maximum
+clone translation increment of 0.01595 m. The 351 fixed outside-window keyframe
+observations of those same points go from 351/351 inliers, mean 0.5681 px, to
+0/351, mean 39.4515 px. This exposes global-map inconsistency, but does not prove
+that the next frontend matcher caused the next failure: source 162 still enters
+its solve with 82/88 selected current inliers.
+
+An independent, untuned equivalent information-form solve checks the suspected
+singular compressed Kalman solve. Although its original innovation matrices
+have condition numbers about 3.47e18 / 5.87e15, replacing the algebra changes
+recorded clone increments by only 3.00e−9 / 9.30e−9 in L2, and preserves the
+failure: all-current populations retain 88/132 then 3/107 inliers and 0 then 5
+negative-depth points. Actual covariance minimum eigenvalues are −4.44e−17 /
+−6.42e−17, consistent with floating precision. These two captured solves do
+not support shipping a numerical solver replacement as the repair.
+
+The initialization handoff is the next concrete design boundary. In the second
+candidate, accepted initialization at source 159 used 50 visual poses spanning
+2.450000128 s and 0.196744678 m of metric camera displacement. `InitializeMetric`
+clears filter clones/local points and starts from the current state with manually
+assigned covariance; `transformMetricMap` clears old local factors. First solve
+161 therefore uses only clones 159–161, spanning 0.100 s and 0.0107523 m.
+Older keyframes remain frontend map/image references, but their geometric
+constraints and a bootstrap joint posterior/cross covariance are absent from
+that point-elimination system. Weak depth geometry plus this handoff is a
+supported next hypothesis, not a uniquely proved root cause. A coherent repair
+must define which initialization observations/prior enter the joint system,
+preserve map consistency and uncertainty, and validate nonlinear increments
+before committing/culling. Adding fixed old poses or an independent point prior
+without treating repeated information and cross covariance is not yet a
+qualified solution. No third algorithm patch was stacked after the two failures.
+
+Each child build passed all 25 packages. The candidate's actual C++ recovery
+helper passed two compiler-flag variants and the affected suite (32 tests), but
+that verified algebra/rejection only, not continuous VIO. Its dedicated tests
+were removed with the rejected production patch; the final existing preparation
+suite passes **30 tests, 11.71 s**. The clean combined patch was never separately
+built/replayed, stereo was not rerun, and the planned 1×/cross-sequence/repeat
+checks were NOT_RUN because 0.5× failed. The diagnostic overhead is an execution
+limit; these observations do not establish that every possible implementation
+of consistent recovery must fail.
+
+Evidence is local under `.agents/runs/schurvins_mono_repair/`: the three new run
+directories, `diagnostic-analysis.json`, `joint-analysis.json`,
+`conditional-analysis.json`, `state-update-numerics.json`, `causal-review.json`,
+`protected-before.json`,
+`protected-after.json`, `final-tests.xml` and `receipt.json`. Exact source/build
+and rejected patch bytes remain under the external
+`/home/shiuhou/Projects/rm27-schurvins-research/mono-repair/` directory. Original
+134 protected file hashes, source/devel inventories and links, old 35/39-file
+smoke memberships, matrix and USER_STOPPED plan were rechecked unchanged.
+Complete native IMU ingestion remains UNOBSERVED; ATE/RPE, publication latency,
+operational health and RK3576/physical Camera+IMU/PX4 acceptance remain unqualified.
+There were no hardware operations or Git publication.
 
 ## WIP publication checkpoint
 

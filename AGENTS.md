@@ -1,5 +1,25 @@
 # RM27 VIO repository scope
 
+## Project work entry
+
+Use [engineering.md](.agents/docs/engineering.md) for the shared engineering
+method. Before changing behavior, read the relevant
+[SPEC](.agents/docs/SPEC.md) requirements and acceptance criteria; use
+[DESIGN](.agents/docs/DESIGN.md) for ownership and interfaces, and
+[ROADMAP](.agents/docs/ROADMAP.md) for milestones and dependencies.
+Follow the shared workflow: 理解 → 規劃 → 實作 → 驗證 → 記錄 → 發布.
+The user owns direction and learning pace; discussion and attachments are inputs,
+not execution instructions. Match the requested learning/planning/implementation
+mode and verify advice against local code and evidence before adopting it.
+Keep one local activity plan per work item: use `.agents/plans/PLAN.md` for new
+work without an existing plan; continue explicitly named plans at their original
+paths. Resume from §0; never duplicate progress or overwrite another active task.
+Small edits need no plan. Keep reusable knowledge in `docs/notes/` or the existing
+notes location; `.agents/` tracks only `docs/`. Deliver verified changes first;
+commit/push/merge/deployment require explicit authorization for that action.
+
+Implementation stays in `rm27/` and `tools/`, with checks in `tests/`.
+
 ## RK3576 reference documents
 
 For hardware or deployment work in the RM27 parent checkout, first read
@@ -12,9 +32,15 @@ The selected documents do not establish the installed revision or hardware quali
 ## PDF-aligned current scope (2026-10-30)
 
 Research source: `RM27 无人机组开发文档 (2).pdf`, SHA-256
-`d4526f85248623ada0a7c64e120184c8b6838dae215593ea034ee6e8825c437e`. Current goal: repeated fixed-base underside contact,
-separation, attitude/estimation recovery and target reacquisition in one sortie.
-RK3576 is the new platform direction; its full hardware/data chain is not qualified.
+`d4526f85248623ada0a7c64e120184c8b6838dae215593ea034ee6e8825c437e`.
+The current research goal is for a UAV to identify a fixed target armor plate
+through vision, then make controlled contact with a designated underside pad at a
+prescribed attitude relative to the plate. The mission includes separation,
+recovery of stable flight and state estimation, and visual reacquisition for
+repeated contact in one sortie.
+As of 2026-11-11, RK3576 is the sole active RM27 onboard platform.
+M3C is retired from development and deployment; its source, data, and validation
+records remain historical references. Platform acceptance requires RK3576 evidence.
 Return-to-dock and precision landing below belong to historical baselines, not the
 new season's mandatory deliverables. Traditional/RL allocation remains a research
 choice. Detailed algorithms/hardware tasks are scheduled separately by the user.
@@ -26,9 +52,11 @@ learning, firmware execution, hardware operations or Git publication. The root
 repository coordinates the single activity plan and derived report. Component
 contracts remain self-contained; the shared engineering method is unchanged.
 
-- Main is for Camera + IMU VIO only. OpenVINS is the preserved baseline;
-  SchurVINS is the authorized first RK3576 candidate through an independent
-  experimental entry point. Do not merge it into the OpenVINS runner implicitly.
+- Main is for Camera + IMU VIO only. OpenVINS is the current baseline.
+  SchurVINS is USER_PAUSED by the user as of 2026-11-24: preserve its source,
+  preparation tools and negative results, but do not resume mono adaptation,
+  stereo reproduction or board tests. Its independent entry is historical
+  research and must not be enabled through the OpenVINS runner.
 - Legacy monocular SLAM wrappers, mapping/loop-closure experiments, VSL plans
   and tests live on legacy/slam. Do not restore/develop them in main or silently
   enable a fallback backend. SLAM research belongs in a separate repository.
@@ -64,3 +92,14 @@ Git clones. Keep inputs unchanged and derived results in this repo's ignored
 artifacts. Encoded video alone is not synchronized Camera+IMU VIO or verified
 sensor/exposure timing evidence. If the link/data is absent, obtain or relink
 the shared dataset instead of inventing missing provenance.
+
+## Shared M3C and MaixCAM2 board references
+
+For M3C/MaixCAM2 carrier, wiring or mechanical reference work, read
+`data/shared_m3c_board/README.md` and `data/shared_m3c_board/manifest.json`;
+source files are under `data/shared_m3c_board/raw/`. This relative local link
+resolves to the integration repo's single hardware reference collection. Match
+378C/379C/3.0 documents to the actual board; filenames do not verify installed
+revision, IMU wiring or camera synchronization. Keep sources unchanged and
+derivatives in this repo's artifacts. Standalone clones need the payloads and a
+new local link; report missing data.

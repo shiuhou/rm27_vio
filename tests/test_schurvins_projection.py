@@ -1643,7 +1643,7 @@ def test_health_episode_source_span_does_not_depend_on_qualified_receipts(change
     assert episode['observed_receipt_span_ns'] is None
 
 
-@pytest.mark.parametrize('change', ['info_order', 'info_duplicate', 'receipt_rewind', 'mapped_tick', 'native_duplicate', 'source_conflict'])
+@pytest.mark.parametrize('change', ['info_order', 'info_duplicate', 'receipt_rewind', 'mapped_tick', 'native_duplicate', 'source_conflict', 'bundle_conflict'])
 def test_health_episode_rejects_order_or_fabricated_watchdog_time(change):
     from tools.schurvins.summarize import health_episode_summary
     _, info, native, states = health_episode_fixture()
@@ -1657,6 +1657,8 @@ def test_health_episode_rejects_order_or_fabricated_watchdog_time(change):
         native['tracking_quality']['events'].append(copy.deepcopy(native['tracking_quality']['events'][0]))
     elif change == 'source_conflict':
         native['tracking_quality']['events'][0]['camera_index'] += 1
+    elif change == 'bundle_conflict':
+        native['tracking_quality']['events'][0]['bundle_id'] += 1
     else:
         states['outputs'][-1]['trigger'] = 'INDEPENDENT_SCHEDULE'
     with pytest.raises(ValueError):
@@ -1726,11 +1728,15 @@ def test_health_episode_does_not_compare_receipt_values_from_different_clocks(cl
     assert episode['observed_receipt_span_ns'] is None
 
 
-def test_sealed_health_episode_summary_keeps_run_failure_and_openvins_unknown(tmp_path):
+@pytest.mark.parametrize('pose_count,failure_code', [(0, 'NATIVE_OUTPUT_EMPTY'), (1, 'TRAJECTORY_NOT_EVALUABLE')])
+def test_sealed_health_episode_summary_keeps_run_failure_and_openvins_unknown(tmp_path, pose_count, failure_code):
     import json
     from tools.openvins.native_accuracy import digest
     from tools.schurvins.summarize import summarize_run
     _, info, native, states = health_episode_fixture()
+    # The final intermediate decision remains 0; metric initialization can
+    # publish Info quality 2 while stage 1 still disallows normal pose output.
+    info[-1].update(stage=1, tracking_quality=2)
     assert summarize_run(tmp_path)['health_episodes']['status'] == 'NOT_RUN'
     (tmp_path/'raw').mkdir()
     for row in info:
@@ -1738,11 +1744,17 @@ def test_sealed_health_episode_summary_keeps_run_failure_and_openvins_unknown(tm
     (tmp_path/'raw/info.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in info))
     (tmp_path/'native-observations.json').write_text(json.dumps(native))
     (tmp_path/'native-state-output.json').write_text(json.dumps(states))
+    poses = [dict(state_ns=1000, position=[0, 0, 0])]*pose_count
+    (tmp_path/'raw/pose.jsonl').write_text(''.join(json.dumps(row)+'\n' for row in poses))
     frozen = {str(p.relative_to(tmp_path)):digest(p) for p in tmp_path.rglob('*') if p.is_file()}
-    run = dict(status='FAILED', config=dict(backend='SchurVINS'), output_sha256=frozen)
+    run = dict(status='FAILED', failure_code=failure_code,
+               config=dict(backend='SchurVINS'), output_sha256=frozen)
     (tmp_path/'run.json').write_text(json.dumps(run))
     summary = summarize_run(tmp_path)
     assert summary['status'] == 'FAILED' and summary['health_episodes']['status'] == 'OBSERVED'
+    assert summary['failure_code'] == failure_code
+    assert all(digest(tmp_path/name) == expected for name, expected in frozen.items())
+    assert len((tmp_path/'raw/pose.jsonl').read_text().splitlines()) == pose_count
     run['config']['backend'] = 'OpenVINS'
     (tmp_path/'run.json').write_text(json.dumps(run))
     assert summarize_run(tmp_path)['health_episodes']['status'] == 'NOT_RUN'
@@ -1750,3 +1762,43 @@ def test_sealed_health_episode_summary_keeps_run_failure_and_openvins_unknown(tm
     run.pop('output_sha256')
     (tmp_path/'run.json').write_text(json.dumps(run))
     assert summarize_run(tmp_path)['health_episodes']['status'] == 'NOT_RUN'
+
+
+@pytest.mark.parametrize('decision_quality,expected_status', [(0, 'PASS'), (2, 'FAIL')])
+def test_health_episode_preserves_intermediate_initialization_quality_and_later_info(
+        tmp_path, decision_quality, expected_status):
+    import json
+    from rm27.perception.vision.localization.experiments.native_events import analyze_native_events
+    from tools.schurvins.summarize import health_episode_summary
+    sensor = 1403715280962142976
+    phases = [('frontend_begin', [1]),
+              ('quality_decision', [162, 0, 40, 40, 0, 0, 0, 2, 0, 0, decision_quality, 0]),
+              ('metric_filter_commit', [sensor/1e9, 1, 0, 0, 0, 0, 0, 0, 0, 0]),
+              ('mono_metric_initialized', [.94, .74, .0085, .017]),
+              ('frontend_end', [1, 0, 2])]
+    events = [dict(schema_version=1, kind=kind, sensor_ns=sensor, bundle_id=154,
+                   monotonic_ns=index+1, values=values) for index, (kind, values) in enumerate(phases)]
+    path = tmp_path/'events.jsonl'
+    path.write_text(''.join(json.dumps(row)+'\n' for row in events))
+    native = analyze_native_events(path, [sensor])
+    assert native['status'] == expected_status
+    if expected_status == 'FAIL':
+        assert native['protocol_issues'][0]['reason'] == 'NATIVE_QUALITY_DECISION_INVALID'
+    info = [dict(state_ns=sensor, observed_monotonic_ns=100, stage=1, tracking_quality=2)]
+    before = copy.deepcopy((info, native))
+    report = health_episode_summary(info, native)
+    assert (info, native) == before
+    assert report['status'] == 'OBSERVED'
+    assert report['native_info']['first_good_episode'] is None
+    assert report['final_info']['classification'] == 'NOT_GOOD'
+    assert report['final_info']['tracking_quality'] == 2
+    comparison = report['native_info']['quality_decision_phase_comparison']
+    if expected_status == 'PASS':
+        assert report['final_info']['quality_decision_tracking_quality'] == 0
+        assert report['final_info']['quality_decision_event_ordinal'] == 2
+        assert comparison['paired_samples'] == comparison['different_quality_samples'] == 1
+        assert comparison['differences'][0]['bundle_id'] == 154
+        assert comparison['differences'][0]['sensor_ns'] == sensor
+    else:
+        assert report['final_info']['quality_decision_tracking_quality'] is None
+        assert comparison['paired_samples'] == comparison['different_quality_samples'] == 0

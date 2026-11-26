@@ -1,9 +1,25 @@
 # SchurVINS public-data reproduction tools
 
+**USER_PAUSED — November 24, 2026.** The user has deferred all SchurVINS
+work. Commands below retain prior reproduction paths; they are not the current
+work queue. OpenVINS remains the mono+IMU baseline.
+
 This independent entry runs the pinned SchurVINS system with its included SVO2.0
 frontend. It does not change the existing `backend=OpenVINS` runner. Actual
 results and platform limitations belong in the
 [integration record](../../.agents/docs/SCHURVINS_INTEGRATION.md).
+
+The [online support check](../../.agents/docs/SCHURVINS_INTEGRATION.md#upstream-support-scope-2026-11-24)
+found explicit upstream statements that the original implementation supports
+stereo only. The user has stopped further RM27 mono adaptation. Mono derivative
+commands and raw failures below are retained for reproducing prior research;
+they are not instructions to continue extending the original system to mono.
+
+The November 24 [bounded mono repair attempt](../../.agents/docs/SCHURVINS_INTEGRATION.md#bounded-monocular-repair-attempt-2026-11-24)
+did not restore continuous tracking: two isolated diagnostic candidates each
+produced one pose on a complete 0.5× V1_01 replay. Their algorithm patch was
+withdrawn. Existing build commands and the native RK3576 package retain their
+original versions; this attempt supplies no new deployment candidate.
 
 The tools require Linux, Docker, Python 3.10+ with NumPy/OpenCV on the host, and
 enough external storage for sources, the image, build and dataset. All commands
@@ -250,6 +266,16 @@ different internal boundary. Native maximum RSS is KiB; whole-container
 `NOT_RUN`. Repeat trajectory differences remove only the first common pose's
 rigid world gauge, matching original camera IDs with no scale correction.
 
+Health summaries retain intermediate native `quality_decision` separately from
+the later published Info, even for the same source time and bundle. Metric
+initialization and failure handling can change quality/stage between these
+phases. `native_info.quality_decision_phase_comparison` reports paired samples,
+quality differences and their exact source/bundle/event identities; it does not
+require the two phase values to be equal. Published Info is classified Good only
+at stage 2 / quality 2. Source association and native decision validation remain
+required, and failed/unevaluable runs retain their original status. See the
+[0/1-pose diagnosis](../../.agents/docs/SCHURVINS_INTEGRATION.md#monocular-state-to-pose-diagnosis-2026-11-23).
+
 ```bash
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q \
   tests/test_schurvins_prepare.py tests/test_schurvins_projection.py \
@@ -359,9 +385,9 @@ all `StateOutputPolicy` fields and represents test limits, not flight limits.
 and full-sequence coverage stay intact. `memory_limit_gib` selects a distinct
 4 or 12 GiB group. Default OpenVINS dispatch is unchanged.
 
-For an explicitly named **experimental RM27 SchurVINS derivative**, prepare a
-fresh external workspace and pass `--patch tools/schurvins/native-diagnostics.patch`
-and `--patch tools/schurvins/mono-initialization.patch` to the existing build
+The historical **experimental RM27 SchurVINS derivative** was built in a fresh
+external workspace with `--patch tools/schurvins/native-diagnostics.patch`
+and `--patch tools/schurvins/mono-initialization.patch` on the existing build
 command. Every build preserves exact applied patch bytes beside its installation
 manifest. This derivative is not accepted merely because it compiles or passes
 synthetic alignment cases. Keep the upstream source/control and failed runs.
@@ -398,6 +424,74 @@ and valid/fresh state are required. This does not connect to a physical flight
 controller or prove fusion. See its CLI `--help` and the retained mock evidence.
 
 ## ARM64 and later datasets
+
+### RK3576 native diagnostic candidate
+
+`rk3576_prepare.py` assembles the existing verified ARM64 reference package and
+frozen input-boundaries overlay into a **native Docker diagnostic candidate**.
+It does not run Docker, SSH or the estimator. It flattens the target userspace
+into `/`, preserves `/ws`, checks the complete source/devel/userspace manifests
+and target-loader library hashes, reopens the serialized tar to verify names,
+hardlinks and hashes, and retains source locks and exact patches. Sensor CSVs,
+calibration hashes and every decoded image/IMU row must match the source ledger.
+The resulting `FROM scratch` Dockerfile has no build-time `RUN` or downloads.
+It uses the pinned Bionic/Melodic libraries; Debian host libraries are not mixed
+into the estimator. The amd64 PRoot helper is not included.
+
+```bash
+python3 -m tools.schurvins.rk3576_prepare \
+  --base-package "$SCHUR_RESEARCH/arm64/package-reference/package.json" \
+  --overlay-package "$SCHUR_RESEARCH/arm64/package-input-boundaries/package.json" \
+  --input "$SCHUR_RESEARCH/inputs/v101-mono" \
+  --output "$SCHUR_RESEARCH/rk3576/native-mono-diagnostic"
+```
+
+The complete candidate directory is the transfer unit. `candidate.json` locks
+the runtime archive, provenance, scripts, Dockerfile and sensor-only input.
+The locally prepared V1_01 candidate is about 1.88 GB, with an approximately
+795 MB runtime archive expanding to 2.24 GB of file content. Check free storage
+for the candidate, Docker build/cache/image and output before transferring;
+these payload sizes alone are not a total Docker disk-space bound.
+Keep the original EuRoC archive/ground truth on the PC for later existing
+evaluation. Do not change the input, patches or old installation manifests to
+claim that a native package repairs the PC mono failure: the latest 0.5×/1× PC
+smokes produced **0/1 poses**, respectively. The ARM portability patches match
+the frozen PC experiment patches, but architecture-dependent files differ.
+
+The following commands are for a **later authorized board test**, from the
+transferred candidate directory. They have not been run on RK3576 in this
+preparation. A local native Linux ARM64 Docker daemon and sufficient free disk
+are prerequisites; this entry does not install Docker or change the BSP.
+
+```bash
+docker build --network none --platform linux/arm64 --pull=false \
+  -t rm27-research/schurvins-rk3576:input-boundaries .
+schur_image=$(docker image inspect --format '{{.Id}}' rm27-research/schurvins-rk3576:input-boundaries)
+python3 ./rk3576_board.py doctor --bundle "$PWD" --image "$schur_image"
+python3 ./rk3576_board.py run --bundle "$PWD" --image "$schur_image" \
+  --output "$HOME/schur-rk3576-v101-mono-half-01"
+```
+
+The output must be new and outside the candidate. Doctor checks actual RK3576
+device-tree identity, native host/daemon/image architecture, payload label,
+available memory and output space. The initial diagnostic profile is 4 CPU
+quota, 2560 MiB memory/swap cap and 900 s inner timeout at 0.5× mono. It requires
+512 MiB additional available-memory admission reserve; these are experiment
+bounds, not measured performance or thermal acceptance limits. CPU quota does
+not pin particular cores. Stored board evidence reported 3,994,004 kB RAM;
+doctor must measure the current board again.
+
+`run` first checks the native loader/Python dependencies, then reuses the existing
+`run_inner.py` and `ros_transport.py`. It records board temperatures/frequencies,
+cgroup observations, raw events/poses, parameters and process exits. Missing
+kernel fields stay unavailable. Only its uniquely named containers are removed,
+and their absence must be verified. Network and physical devices are not
+exposed; `/opt/rm27` is not an installation target. `result.json` separates
+process completion from raw pose availability and keeps algorithm qualification
+false. It does not perform transport reconciliation, trajectory scoring or
+cohort acceptance; retain all output for the existing PC analysis, including
+empty/insufficient poses. Native startup, BSP/ABI, real-time load and physical
+Camera+IMU synchronization/calibration remain **NOT_RUN** until separately tested.
 
 `arm64.py` provisions a separate Ubuntu 18.04 / ROS Melodic reference rootfs
 from a pinned ARM64 image and an independent 1,117-package ARM64 lock. It

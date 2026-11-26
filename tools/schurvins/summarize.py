@@ -482,8 +482,9 @@ def health_episode_summary(info, native=None, states=None, *, fault=None):
         previous_sensor = sensor
         quality, correction = qualities.get(sensor, {}), corrections.get(sensor, {})
         fields = metadata.get(sensor, {})
-        if quality and quality.get('tracking_quality') != row['tracking_quality']:
-            raise ValueError('health episode native quality differs from Info')
+        # quality_decision is an intermediate Schur inlier decision. Metric
+        # initialization and failure handling can change the enums before Info
+        # publication, even for this exact source time and bundle.
         epoch = correction.get('native_epoch')
         if epoch is not None and not integer(epoch):
             raise ValueError('invalid health episode native epoch')
@@ -494,11 +495,14 @@ def health_episode_summary(info, native=None, states=None, *, fault=None):
         rows.append(dict(classification=('GOOD' if row['stage'] == 2
                 and row['tracking_quality'] == 2 else 'NOT_GOOD'),
             sensor_ns=sensor, source_index=fields.get('camera_index'),
-            observation_segment=fields.get('observation_segment'), epoch=epoch,
+            observation_segment=fields.get('observation_segment'), bundle_id=fields.get('bundle_id'), epoch=epoch,
             epoch_semantics='EXACT_NATIVE_EVENT' if epoch is not None else 'UNKNOWN',
             event_ordinal=quality.get('event_ordinal', correction.get('event_ordinal')),
             receipt=stamp, trigger='INFO_CALLBACK', stage=row['stage'],
-            tracking_quality=row['tracking_quality'], projected_usable=callback.get('usable'),
+            tracking_quality=row['tracking_quality'],
+            quality_decision_tracking_quality=quality.get('tracking_quality'),
+            quality_decision_event_ordinal=quality.get('event_ordinal'),
+            projected_usable=callback.get('usable'),
             reasons=list(callback.get('reasons', [])),
             last_accepted_visual_time=callback.get('last_accepted_visual_time'),
             accepted_visual_correction=(correction.get('state_source')
@@ -552,6 +556,18 @@ def health_episode_summary(info, native=None, states=None, *, fault=None):
             unknown_epoch_samples=sum(r['epoch'] is None for r in values))
 
     report.update(status='OBSERVED', native_info=describe(rows, 'GOOD'), final_info=rows[-1])
+    paired_quality = [r for r in rows if r['quality_decision_tracking_quality'] is not None]
+    differences = [r for r in paired_quality if r['quality_decision_tracking_quality'] != r['tracking_quality']]
+    report['native_info']['quality_decision_phase_comparison'] = dict(
+        status='OBSERVED' if paired_quality else 'NOT_RUN', paired_samples=len(paired_quality),
+        different_quality_samples=len(differences),
+        differences=[dict(sensor_ns=r['sensor_ns'], source_index=r['source_index'],
+            bundle_id=r['bundle_id'], observation_segment=r['observation_segment'],
+            quality_decision_event_ordinal=r['quality_decision_event_ordinal'],
+            quality_decision_tracking_quality=r['quality_decision_tracking_quality'],
+            published_info_tracking_quality=r['tracking_quality'], published_info_stage=r['stage'])
+            for r in differences],
+        interpretation='intermediate inlier decision and later published Info are distinct phases; equality is not required')
     report['native_info']['native_trace_completeness'] = {
         key:native.get('coverage', {}).get(key) for key in (
             'complete_trace', 'complete_trace_status', 'event_limit_reached', 'paired_spans_complete')}

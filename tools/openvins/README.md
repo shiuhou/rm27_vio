@@ -1,5 +1,150 @@
 # Pinned native OpenVINS preparation
 
+## Source review and native runtime dependencies
+
+The current target is RK3576 mono + IMU. SchurVINS is `USER_PAUSED`; references
+to comparisons below preserve prior experiments. Start with the component
+[review guide and source-only tests](../../README.md#review-the-current-source-with-teammates).
+The new `recording.py` and `recording_replay.py` are Python adapters around an
+existing native runtime. NumPy, OpenCV, PyYAML and pytest are declared in
+`../../requirements.txt`; ROS-specific tests need the separate sourced ROS2
+environment and may skip in a plain Python environment.
+
+| Dependency | Included in this component's source review |
+|---|---|
+| Recording validation, export, replay orchestration, diagnostics and tests | Yes: `tools/openvins/`, `rm27/` and `tests/`, included in this review branch |
+| OpenVINS upstream estimator | No: pinned `rpng/open_vins` commit `69488123ed9362dd44b6f28e7f4680abbff1442b` |
+| ROS-free headless C++ wrapper and exact prepared upstream changes | Yes: [headless/](headless/README.md), source lock and the three-file patch; upstream itself is fetched separately |
+| Executable, build receipt and immutable Docker image | No: supply a separately verified runtime descriptor before native replay |
+| Real/public raw recording, calibration, IMU noise/gravity evidence | No: supply sealed input and matching source evidence; tests use labeled mock fixtures |
+| RK3576 sensor recorder/BSP, physical timing and calibration | Not qualified; the offline entry does not implement hardware acquisition |
+
+The existing PC runtime's build receipt identifies 202 prepared upstream files
+and explicit changes to `ov_msckf/src/update/UpdaterMSCKF.cpp`,
+`ov_msckf/src/update/UpdaterSLAM.cpp` and
+`config/euroc_mav/estimator_config.yaml`. Its C++ wrapper source is now included:
+`headless/{build.py,audit.cpp,audit.h,main.cpp,CMakeLists.txt,README.md}`.
+A bare upstream clone or this component's ROS2 Dockerfile does not reconstruct
+that identical ROS-free diagnostic build.
+Keep the exact source manifests, modifications and source notices together
+when handing over that native dependency; do not substitute a different build
+under the recorded identity.
+
+For the maintainer's existing local evidence only, the source locations are
+`/home/shiuhou/Projects/rm27_vio-m3c/tools/openvins/headless/` and
+`/home/shiuhou/Projects/rm27-m3c-openvins-research/src/open_vins/`.
+The PC binary and `build-manifest.json` are under the latter research root's
+`build-pc/`. The six wrapper files were imported into canonical
+[`headless/`](headless/README.md) on 2026-11-26 after exact hash comparison with
+that receipt. Their source preparation and native build entry now belong to
+this component; the old paths are provenance references. The upstream source
+and installed runtime remain separate dependencies. Teammates running the
+source-only checks do not need them; native replay requires an explicit matching
+runtime. Source preparation verification does not qualify a new native build.
+
+## Sealed Camera + IMU recording → offline diagnostics
+
+`python -m tools.openvins.recording_replay` accepts the shared sensor-only
+recording format from `experiments.sensors` and calls the existing ROS-free
+OpenVINS `69488123…` headless runner. It does not open hardware, align an
+arbitrary MP4 with a flight log, modify the estimator, or publish to PX4.
+
+Run from the VIO checkout:
+
+```bash
+python -m tools.openvins.recording_replay \
+  --recording /absolute/sealed-recording \
+  --parameters /absolute/imu-gravity-parameters.json \
+  --estimator-config /absolute/estimator-tuning.yaml \
+  --runtime /absolute/runtime.json \
+  --output /absolute/fresh-replay-output --rate 0 --timeout-s 180
+```
+
+Use `--prepare-only` to validate and seal inputs without executing a process;
+omit `--runtime` in that mode. `--rate 0` runs unpaced; `0.5` and `1` pace the
+offline camera timeline. Multiple source epochs require `--source-epoch N`;
+they are not silently joined or treated as a native estimator reset. Existing
+output directories are refused. Python dependencies include NumPy, OpenCV and
+PyYAML; the selected native runtime needs its own verified dependencies.
+
+The input directory contains `config.json`, `events.jsonl`, original mono8 PNGs
+under `images/`, and `recording.json` with exact artifact hashes. Every camera
+event carries the original timestamp/clock/sequence and image hashes. Every IMU
+event carries original raw gyro in rad/s and accelerometer specific force in
+m/s² with its sample timestamp. Configuration binds the selected camera, IMU
+frame, clock mappings and sourced calibration. Generic recorded video, attitude
+quaternions, integrated delta angles or a nominal frame rate do not replace
+these measurements. A flight log is usable only after its actual raw-IMU and
+sampling-time contents have been checked; this entry does not import ULog/BIN.
+Initial synchronized recordings can be made with a rigid camera/IMU assembly
+moved by hand on the ground; flight is not required to establish the data path.
+
+`config.json` follows the existing
+[Camera–IMU contract](../../rm27/perception/vision/docs/RM27_VIO_DATA_CONTRACT.md).
+The selected camera's `calibration.intrinsics` must additionally declare
+`resolution: [width, height]` matching every image, exactly eight parameters
+`[fx, fy, cx, cy, d0, d1, d2, d3]` and the supported pinhole-radtan or
+pinhole-equidistant model. `T_imu_camera` maps camera coordinates into the IMU;
+the offset convention is `imu_time_equals_mapped_camera_time_plus_offset`.
+Evidence objects bind status, an absolute source-file path and its SHA-256.
+Hardware requires VERIFIED acquisition/exposure and calibration evidence;
+public recorded timestamps retain their original OBSERVED status. Unknown
+calibration, receipt-only time, unmapped clocks, unsupported delivery-delay
+faults and insufficient IMU coverage are rejected. Sequence gaps are preserved.
+The single-timestamp native image model does not compensate rolling shutter.
+
+The explicit `--parameters` JSON contains `schema_version: 1`,
+`purpose: OPENVINS_RECORDING_PARAMETERS`, `measurement_binding`,
+`imu_parameters`, `gravity_mag` and `gravity_evidence`. The measurement binding
+is a sourced evidence object plus `imu_id`, `imu_frame`,
+`source_imu_config_sha256` (canonical JSON hash of the recording's IMU config),
+`measurement_kind: RAW_SPECIFIC_FORCE` and `native_axes_transform: IDENTITY`.
+`imu_parameters` requires the four Kalibr noise/random-walk values, `update_rate`,
+`model: kalibr`, `Tw`, `Ta`, `R_IMUtoACC`, `R_IMUtoGYRO` and `Tg` matrices.
+Gravity has its own evidence object. These values are required inputs; EuRoC
+values are not defaults for real hardware. See the explicitly labeled fixtures
+in [intake tests](../../tests/test_openvins_recording.py) for the exact shape.
+
+Tuning YAML must explicitly select one camera, synchronous subscribers and
+publishers, no downsampling, mask, ArUco, timing dump or total-state dump. Sensor
+paths, gravity and disabled output paths are replaced only by generated local
+settings, with each change recorded. Original tuning and calibration remain in
+the source sidecars. The manifest can be independently rechecked with
+`tools.openvins.recording.check_recording_input`.
+
+`runtime.json` selects an existing executable and its build receipt:
+
+```json
+{
+  "schema_version": 1,
+  "mode": "docker",
+  "binary": "/absolute/openvins_headless",
+  "build_manifest": "/absolute/build-manifest.json",
+  "build_manifest_sha256": "<actual SHA-256 of that receipt>",
+  "image": "sha256:<immutable build_image_id from that receipt>"
+}
+```
+
+`mode: local` runs the same verified binary directly; omit `image` for that
+mode. The receipt must declare the pinned upstream commit, `ros_free: true`
+and the exact binary SHA-256. Docker execution uses the immutable build image,
+no network/devices, four CPUs and 4 GiB with swap disabled. It does not install
+or rebuild dependencies. Paths named in this JSON resolve relative to it.
+The existing PC/ARM runner source provenance is preserved; historical build
+directory names do not imply a new M3C deployment or RK3576 acceptance.
+
+Outputs include frozen `prepared/` inputs and event lineage, native
+`frames.csv`/`poses.csv`/`summary.json`, command/runtime identities, bounded
+`native.log`, process/cleanup evidence and `report.json`/`report.md`. Diagnostics
+reconcile the full camera sequence, native IMU feed-callback counts, finite
+poses, initialization prefix, missing poses, actual accepted visual corrections,
+and offline timing. Filter integration of each IMU sample is not independently
+observed. No reference truth enters estimation or scoring; accuracy remains
+`NOT_EVALUATED_NO_REFERENCE`, tracking health UNKNOWN and operational validity
+false. Timeouts and failures retain raw/partial output and a FAIL report.
+Neither successful process exit nor pose continuity certifies physical
+synchronization, body-frame conversion, RK3576 real-time performance or flight.
+
 ## Runtime adapter continuation
 
 The experiment runner now accepts the separate OpenVINS VIO config through
