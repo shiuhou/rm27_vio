@@ -1,15 +1,19 @@
 # RM27 VIO research
 
-Current vision-team source: `codex/vision-team-review`.
+Current vision-team source: `main`.
 
 ```bash
-git clone --branch codex/vision-team-review https://github.com/shiuhou/rm27_vio.git
+git clone --branch main https://github.com/shiuhou/rm27_vio.git
 ```
 
-Use a feature branch and open pull requests against `codex/vision-team-review`.
+Use a feature branch and open pull requests against `main`.
 This branch includes recording/replay, native wrapper source, lock/patch and tests.
-The combined Onboard checkout is `shiuhou/rm27_drones` on the same review branch.
-`main` retains a different historical research history; it is not this review snapshot.
+The combined Onboard checkout is `shiuhou/rm27_drones` on `main`.
+The `codex/vision-team-review` branch remains the original review checkpoint.
+Main merges that delivery with the earlier historical research history;
+M3C procedures and Schur headless sources retained from that history are
+reference material, and SchurVINS remains `USER_PAUSED`. The published source
+does not qualify live sensors, native RK3576 execution or valid flight outputs.
 
 ## PDF-aligned current scope (2026-10-30)
 
@@ -86,7 +90,7 @@ For a source review, retain `rm27/`, `tools/`, `tests/` (including fixtures),
 `interface_worker.py`, `requirements.txt`, README/AGENTS and `.agents/docs/`.
 Keep source documents and notices with their code. Some OpenVINS tests reuse
 sensor transport helpers in `tools/schurvins/` and sibling test fixtures;
-including them does not resume that paused estimator. This review branch includes
+including them does not resume that paused estimator. Main includes
 `recording.py`, `recording_replay.py`, their tests and the native wrapper source;
 these files are available from its committed tree.
 

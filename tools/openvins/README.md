@@ -12,7 +12,7 @@ environment and may skip in a plain Python environment.
 
 | Dependency | Included in this component's source review |
 |---|---|
-| Recording validation, export, replay orchestration, diagnostics and tests | Yes: `tools/openvins/`, `rm27/` and `tests/`, included in this review branch |
+| Recording validation, export, replay orchestration, diagnostics and tests | Yes: `tools/openvins/`, `rm27/` and `tests/`, included in `main` |
 | OpenVINS upstream estimator | No: pinned `rpng/open_vins` commit `69488123ed9362dd44b6f28e7f4680abbff1442b` |
 | ROS-free headless C++ wrapper and exact prepared upstream changes | Yes: [headless/](headless/README.md), source lock and the three-file patch; upstream itself is fetched separately |
 | Executable, build receipt and immutable Docker image | No: supply a separately verified runtime descriptor before native replay |

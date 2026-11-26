@@ -1,5 +1,66 @@
 # IMU source audit — updated 2026-10-08
 
+Publication scope (2026-10-31): [RAM report index](RAM_DIAGNOSTIC_PUBLICATION.md).
+The four historical RESULT reports are published, not their raw/helper/firmware
+dependencies. Historical firmware/readback statements below are not current checks.
+
+## Latest physical RAM diagnosis — 2026-10-12
+
+[One-run result](../../../../.maixpy/imu-ram-run-20261012/RESULT.md): exact
+candidate04 diagnostic build/BMI0880, user-approved props-off/disarmed trial.
+Logger Wait10443us contains two consecutive vehicle_imu pubs1498us apart;
+depth-one subscription then copies815906 after815904. Missing publication
+4145343628 is absent from saved ULog; gyro integral hole4507us. Same link bracket
+76successful/76received, zero rejection/sequence gap. Finite retained source gyro
+coverage/generation flags continuous; no global hardware acceptance. Exact Wait
+poll/wake/notification-copy cause remains unresolved; diagnostic perturbation
+possible. This is location of one loss, NOT a source/transport fix.
+
+Whole capture11788 integrated records/effective196.32949Hz, two gyro coverage
+holes and separate startup TX rejection; ULog writer dropouts0 is not loss-free.
+Keep delta-angle/delta-velocity/window semantics, actual HRT endpoints and all
+original gates; no raw sample invention/rate/queue/math/contract relaxation.
+Runtime config restored,961 typed params unchanged; diagnostic firmware remains,
+trace both writers frozen, no rollback/flight. VIO-S0/P PARTIAL, Stage C closed.
+Next proposed offline buffered input design needs separate implementation scope;
+do not repeat experiment. Earlier trace-inactive/unknown-layer notes historical.
+
+## Current physical firmware — diagnostic ON flashed, 2026-10-12
+
+[Flash result](../../../../.maixpy/imu-ram-flash-20261012/RESULT.md): user-approved
+candidate04 application CRC verified; board now BASEd6f12ad1+PATCH, NOT stock.
+Disarmed/EV0/BMI0880 preserved,961 typed raw/1780 displayed parameter values and
+saved BSON unchanged, logger idle and trace inactive. No source rate, queue,
+integrator/calibration/EKF/threshold changes; no new capture or loss fix. S0/P
+PARTIAL. Trace command present but timing/continuity still unqualified. Earlier
+no-flash/stock-source observations below are historical; rollback not yet done.
+
+## Latest full diagnostic firmware build — 2026-10-12
+
+[Full board-build result](../../../../.maixpy/imu-ram-build-20261012/RESULT.md):
+exact d6f12ad1/recursive-source OFF and ON builds now VERIFIED. Candidate03 failed
+real NuttX STL availability; candidate04 uses existing PX4 atomics with unchanged
+source/logger collection semantics. Actual static AXI delta22848B, runtime timing /
+resource margins and original skip trigger UNKNOWN. Official same-baseline stock
+file saved locally; it is not current flash/param readback. No flash/physical test,
+rate/queue/EKF/calibration/threshold change. Fresh backups/rollback choice/final
+bounded approval remain. S0/P PARTIAL, Stage A/B retained, Stage C CLOSED.
+Older preparation/build-blocker notices below are their historical snapshots.
+
+## Latest source diagnostic preparation — 2026-10-12
+
+Current development uses PX4v1.17.0d6f12ad1, selected BMI0880, not the historical
+BMI270/v1.15.2 experiment below. Existing clean60s UART records still contain logger
+subscription skips; adding high-rate gyro diagnostics caused a separate verified
+TX rejection. Actual original skip timing trigger remains UNKNOWN.
+
+[RAM diagnostic result](../../../../.maixpy/imu-ram-trace-20261012/RESULT.md) and
+[preflash proposal](../../../../.maixpy/imu-ram-trace-20261012/APPROVAL.md) now contain
+bounded offline-tested C++ tracing/patch/validator, not a flashed image or new run.
+Full firmware build/link-map, original rollback image and fresh parameters/approval
+are prerequisites. No source rate/queue/EKF or acceptance change; Stage A/B retained,
+VIO-S0/P PARTIAL, Stage C CLOSED. Everything below is historical source evidence.
+
 ## CURRENT: authorized disarmed offline capture completed (2026-10-08)
 
 See `PX4_IMU_OFFLINE_VALIDATION.md` for exact config, raw-file hash, commands,

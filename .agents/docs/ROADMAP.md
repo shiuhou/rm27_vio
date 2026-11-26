@@ -2,6 +2,7 @@
 
 | 節點 | 狀態與依賴 |
 |---|---|
+| 視覺組main整合（2026-11-26） | 使用者明確授權直接更新main。以review `52d61673e7b5a6a2e6abd898d169d0ccd331151b`與舊main `acec9d1f9216a03f06c924a5c399816eb425bf0d`建立保留雙方歷史的merge；重疊估測器／sensor／state／MAVLink維持review來源與INVALID／UNKNOWN准入界線。main獨有M3C／Schur來源和證據保留並標為歷史／USER_PAUSED。OpenVINS離線335 PASS／10 ROS依賴skip，新增歷史模組host／mock 59 PASS，state／MAVLink／scope 151 PASS；未編譯／執行native估測器或操作硬體。 |
 | 視覺組Git review（2026-11-26） | `codex/vision-team-review`收錄目前OpenVINS錄製／回放、headless來源／lock／patch及測試，歷史Schur材料維持USER_PAUSED；本次原碼發布不增加native／實機資格 |
 | 視覺組source review交付準備（2026-11-26） | **本機準備PASS／未發布**。README整理入口、來源／raw／native依賴與離線命令，補PyYAML依賴；實際使用的ROS-free headless adapter由歷史來源核對6份hash後匯入`tools/openvins/headless/`，保留上游GPLv3、commit/archive lock及3份檔案精確patch。獨立source-only copy：335 PASS／10 ROS bag依賴skip；prepared source的202份hash及獨立patch readback3份核對一致。未編譯／執行估測器、實機操作或恢復Schur；證據由parent `artifacts/vision-vio-source-review-20261126/receipt.json`保存。整體delivery／PLAN／publication由parent協調，無commit／push。 |
 | OS04A10地面VIO試驗準備（2026-11-25） | **準備文件完成／實機NOT_RUN**。使用者澄清只先做好準備；已列sensor／recorder／clock／校準依賴、慢／較快地面錄製、無執行預檢與無GT判讀，不新增門檻或修改算法。現有離線入口沿用；缺最終IMU／sensor／BSP與可信配對實拍資料，未採集或回放。見parent [試驗流程](../../../../docs/notes/openvins_camera_selection.md#os04a10-地面試驗準備)；獨立clone需同步parent筆記，不能當已具備硬體資格。 |
